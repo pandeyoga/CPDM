@@ -13,9 +13,11 @@
     "smoke:extract": "node dist/src/scripts/smoke-extract.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.2.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
     "hyperformula": "^3.5.0",
     "typescript": "^7.0.2",
