@@ -145,3 +145,19 @@ export function targetHarianRows(
   }
   return rows;
 }
+
+const menitHari = (hm: string): number => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+
+/**
+ * Menit gangguan [mulai, selesai] (HH:MM, satu tanggal) yang jatuh di jam live tanggal itu. Live lewat tengah
+ * malam (liveSelesai ≤ liveMulai) = [00:00, liveSelesai] ∪ [liveMulai, 24:00]. Jam di luar live tidak menggugurkan
+ * target.
+ */
+export function menitGangguanLive(mulai: string, selesai: string, liveMulai: string, liveSelesai: string): number {
+  const a = menitHari(mulai);
+  const b = menitHari(selesai);
+  const l0 = menitHari(liveMulai);
+  const l1 = menitHari(liveSelesai);
+  const irisan = (x: number, y: number): number => Math.max(0, Math.min(b, y) - Math.max(a, x));
+  return l1 > l0 ? irisan(l0, l1) : irisan(0, l1) + irisan(l0, 1440);
+}

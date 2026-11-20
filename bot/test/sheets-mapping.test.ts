@@ -154,7 +154,7 @@ describe("parser tab owner", () => {
     const k = parseKehadiranRows([["h"], [46346, "Brando", "Sakit", "", "bot", "Disetujui"], [46346, "Vanna", "Telat", "", "", "Disetujui"], [46347, "Linda", "Izin", "", "", "Menunggu"]]);
     expect(k).toEqual({ value: [{ host: "Brando", date: "2026-11-20" }], invalid: [] });
     const g = parseGangguanRows([["h"], [46346, "Vanna", "14:00", "16:00", "listrik", "bot", "Disetujui"], [46346, "Vanna", 0.5, 0.5416666667, "", "", "Menunggu"]]);
-    expect(g).toEqual({ value: [{ host: "Vanna", date: "2026-11-20", menit: 120 }], invalid: [] });
+    expect(g).toEqual({ value: [{ host: "Vanna", date: "2026-11-20", mulai: "14:00", selesai: "16:00" }], invalid: [] });
     expect(parseKalenderRows([["h"], [46346, "libur"], ["2026-12-25", ""], ["", ""]])).toEqual({ value: ["2026-11-20", "2026-12-25"], invalid: [] });
   });
   it("baris tak valid dilaporkan dengan nomor baris", () => {
@@ -164,7 +164,8 @@ describe("parser tab owner", () => {
     const g = parseGangguanRows([["h"], [46346, "V", "24:00", "16:00", "", "", "Disetujui"], [46346, "V", "16:00", "14:00", "", "", "Disetujui"]]);
     expect(g.invalid.map((i) => i.row)).toEqual([2, 3]);
     expect(parseKalenderRows([["h"], ["bukan tanggal"], [46346]]).invalid).toHaveLength(1);
-    expect(parseJadwalRows([["h"], [46346, "A", "09:00", "12:00"], [46346, "A", 9, "12:00"]])).toMatchObject({ value: [{ host: "A" }], invalid: [{ row: 3 }] });
+    expect(parseJadwalRows([["Tanggal", "Host", "Mulai", "Selesai"], [46346, "A", "09:00", "12:00"], [46346, "A", 9, "12:00"]]))
+      .toMatchObject({ value: [{ host: "A" }], invalid: [{ row: 3 }] });
   });
   it("koreksi: field tidak peka huruf besar; angka ketat", () => {
     const row = (nilai: unknown, field = "Omzet"): unknown[] => [46346, "L", "x", 1, 2, "Setujui", "", "m1", "Shopee", "Koreksi", field, nilai];
@@ -323,5 +324,51 @@ describe("fix round 1: baris host di Pengaturan, Kondisi per posisi, timeout Goo
     expect(k.sheets.context._options.timeout).toBe(30_000);
     expect(k.drive.context._options.timeout).toBe(30_000);
     expect((k.auth.transporter as unknown as { defaults: { timeout?: number } }).defaults.timeout).toBe(30_000);
+  });
+});
+
+describe("I6: Data Jadwal dari file jadwal asli", () => {
+  const HEADER = ["Tanggal", "ID Staf", "Nama", "Shift", "Mulai", "Selesai", "Durasi Jam", "Selesai Besok", "Aturan Jam", "Status", "Terkunci", "Catatan", "Versi Aturan"];
+  const ASLI: unknown[][] = [
+    ["Jadwal Live CP"],
+    ["Periode", "2026-11"],
+    [],
+    ["Diperbarui", "2026-11-15"],
+    HEADER,
+    ["2026-11-17", "A", "Brando", "P", "9:00", "17:00", "8.00", "FALSE", "", "DRAF", "FALSE", "", "4750cd94"],
+    ["2026-11-17", "B", "Vanna", "OFF", "", "", "0.00", "FALSE", "", "DRAF", "FALSE", "", "4750cd94"],
+    ["2026-11-17", "C", "Linda", "S", "14:00", "22:00", "8.00", "FALSE", "", "DRAF", "FALSE", "", "4750cd94"],
+    ["2026-11-18", "A", "Brando", "S", "", "", "", "FALSE", "", "DRAF", "FALSE", "", "4750cd94"],
+    [],
+    [46344, "B", "Vanna", "M", 0.5, 0.875, "9.00", "FALSE", "", "FINAL", "TRUE", "", "4750cd94"],
+  ];
+
+  it("header dicari menurut nama (baris 5); OFF dan Mulai kosong dilewati; kolom lain diabaikan", () => {
+    expect(parseJadwalRows(ASLI)).toEqual({
+      value: [
+        { date: "2026-11-17", host: "Brando", mulai: "09:00", selesai: "17:00" },
+        { date: "2026-11-17", host: "Linda", mulai: "14:00", selesai: "22:00" },
+        { date: "2026-11-18", host: "Vanna", mulai: "12:00", selesai: "21:00" },
+      ],
+      invalid: [],
+    });
+  });
+
+  it("baris tak valid dilaporkan dengan nomor baris sheet; tanpa header → kosong (mode tanpa jadwal)", () => {
+    const rusak = [...ASLI, ["2026-11-31", "A", "Brando", "P", "9:00", "17:00"]];
+    expect(parseJadwalRows(rusak).invalid).toEqual([{ tab: "Data Jadwal", row: 12, reason: expect.stringContaining("2026-11-31") }]);
+    expect(parseJadwalRows([["Jadwal"], ["2026-11-17", "Brando", "09:00", "17:00"]])).toEqual({ value: [], invalid: [] });
+    expect(parseJadwalRows([])).toEqual({ value: [], invalid: [] });
+  });
+
+  it("readJadwal membaca tab Data Jadwal di file jadwal (JADWAL_SPREADSHEET_ID), semua kolom", async () => {
+    const calls: Array<{ spreadsheetId: string; range: string }> = [];
+    const sheets = { spreadsheets: { values: { get: async (p: { spreadsheetId: string; range: string }) => {
+      calls.push(p);
+      return { data: { values: ASLI } };
+    } } } } as never;
+    const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F", JADWAL_SPREADSHEET_ID: "JJ" }, { sheets, drive: {} as never });
+    expect(await g.readJadwal()).toHaveLength(3);
+    expect(calls).toEqual([expect.objectContaining({ spreadsheetId: "JJ", range: "'Data Jadwal'!A:Z" })]);
   });
 });

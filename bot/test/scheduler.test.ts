@@ -6,7 +6,7 @@ import {
   waktuRekap, type SchedulerDeps,
 } from "../src/app/scheduler.js";
 import { KV_GANGGUAN_AKTIF } from "../src/app/handleMessage.js";
-import { msgBelumLapor, msgEskalasi, msgTidakCocok } from "../src/domain/messages.js";
+import { msgBelumLapor, msgEskalasi, msgJadwalTidakTerbaca, msgTidakCocok } from "../src/domain/messages.js";
 import { addDays } from "../src/domain/time.js";
 import type { ExtractResult } from "../src/domain/types.js";
 import type { OutboxOp } from "../src/infra/db.js";
@@ -106,6 +106,23 @@ describe("pesan pagi", () => {
     expect(s.w.ke(GROUP)).toHaveLength(1);
     expect(s.g.applied.filter((o) => o.type === "writeHeartbeat").length).toBeGreaterThanOrEqual(7);
     await jalan.stop();
+  });
+});
+
+describe("I6: Jadwal aktif tapi jadwal kosong", () => {
+  it("mode tanpa jadwal: pesan pagi untuk semua host, tanpa tag akhir shift; owner diberi tahu sekali hari itu", async () => {
+    const s = setup({ jadwalAktif: true });
+    s.g.jadwal = [];
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pagi = await menit(s, "2026-11-20", "07:59", "08:20");
+    const grup = pagi.filter((k) => k.chatId === GROUP);
+    expect(grup).toHaveLength(1);
+    for (const h of ["Brando", "Vanna", "Linda"]) expect(grup[0]!.text).toContain(h);
+    expect(pagi.filter((k) => k.chatId === OWNER).map((k) => k.text)).toEqual([msgJadwalTidakTerbaca()]);
+    await jalankanRefresh(s.rt);
+    expect((await menit(s, "2026-11-20", "14:59", "22:05")).filter((k) => k.chatId === GROUP || k.chatId === OWNER)
+      .map((k) => k.text)).not.toContain(msgJadwalTidakTerbaca());
+    expect(s.w.sent.filter((m) => m.text.includes("shift hari ini sudah selesai"))).toEqual([]);
   });
 });
 

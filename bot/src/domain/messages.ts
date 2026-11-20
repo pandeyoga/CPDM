@@ -212,6 +212,11 @@ export function msgGangguanDitutup(rows: Array<{ tanggal: string; host: string; 
   ].join("\n");
 }
 
+/** Jadwal aktif = YA tapi jadwal kosong atau tak terbaca: bot sementara memakai mode tanpa jadwal (sekali per hari). */
+export function msgJadwalTidakTerbaca(): string {
+  return "Jadwal aktif = YA, tapi jadwal kosong atau tidak terbaca. Sementara bot memakai mode tanpa jadwal: tidak ada tag akhir shift dan target dibagi rata. Mohon cek tab Data Jadwal (header Tanggal, Nama, Shift, Mulai, Selesai; Nama sama dengan nama host).";
+}
+
 /** Gambar tertunda yang tidak bisa diunduh lagi setelah 24 jam (berkas lokal hilang) dibuang. */
 export function msgGambarHilang(host: string, tanggal: string, jam: string): string {
   return `Laporan ${host} ${tgl(tanggal)} pukul ${jam} tidak bisa diproses: gambarnya sudah tidak bisa diunduh lagi. Mohon minta host mengirim ulang screenshot-nya di grup.`;

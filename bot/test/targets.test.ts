@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTargets, seharusnya, butuhPerHariKerja, targetHarianRows, onAirHours, type TargetInputs } from "../src/domain/targets.js";
+import { computeTargets, seharusnya, butuhPerHariKerja, targetHarianRows, onAirHours, menitGangguanLive, type TargetInputs } from "../src/domain/targets.js";
 
 const base = (over: Partial<TargetInputs> = {}): TargetInputs => ({
   month: "2026-11", teamTarget: 60_000_000,
@@ -132,5 +132,21 @@ describe("targetHarianRows", () => {
       }
     }
     expect(butuhPerHariKerja(t.Linda!, 0, inp, "Linda", "2026-11-30")).toBe(0);
+  });
+});
+
+describe("I5: menit gangguan dipotong ke jam live", () => {
+  it("07:30–10:00 dengan live 09:00–22:00 → 60 menit", () => {
+    expect(menitGangguanLive("07:30", "10:00", "09:00", "22:00")).toBe(60);
+  });
+  it("di dalam, sebagian sesudah, dan sepenuhnya di luar jam live", () => {
+    expect(menitGangguanLive("13:00", "14:30", "09:00", "22:00")).toBe(90);
+    expect(menitGangguanLive("21:00", "23:59", "09:00", "22:00")).toBe(60);
+    expect(menitGangguanLive("06:00", "08:30", "09:00", "22:00")).toBe(0);
+  });
+  it("live lewat tengah malam (09:00–01:00)", () => {
+    expect(menitGangguanLive("00:00", "02:00", "09:00", "01:00")).toBe(60);
+    expect(menitGangguanLive("23:00", "23:59", "09:00", "01:00")).toBe(59);
+    expect(menitGangguanLive("05:00", "10:00", "09:00", "01:00")).toBe(60);
   });
 });

@@ -64,7 +64,7 @@ describe("sheetBlueprint", () => {
 
   it("tab owner: kolom yang boleh diedit", () => {
     expect(tab("Koreksi & Atribusi").editableRanges).toEqual(["F2:G"]);
-    expect(tab("Gangguan").editableRanges).toEqual(["B2:B", "G2:G"]);
+    expect(tab("Gangguan").editableRanges).toEqual(["B2:D", "G2:G"]); // I5: Mulai/Selesai (C:D) boleh diubah owner
     expect(tab("Kehadiran").editableRanges).toEqual(["A2:D", "F2:F"]);
     expect(tab("Kalender Live").editableRanges).toEqual(["A2:B"]);
   });

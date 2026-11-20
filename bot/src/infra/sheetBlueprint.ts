@@ -227,7 +227,8 @@ export function sheetBlueprint(): TabBlueprint[] {
       validations: [daftar("F2:F", KEPUTUSAN)], formats: [{ range: "A2:A", kind: "tanggal" }],
     },
     {
-      title: TAB.gangguan, headers: [...GANGGUAN_HEADERS], editableRanges: ["B2:B", "G2:G"], editors: "owner",
+      // Owner boleh membetulkan Host dan jam Mulai/Selesai (B:D) dan memutuskan (G).
+      title: TAB.gangguan, headers: [...GANGGUAN_HEADERS], editableRanges: ["B2:D", "G2:G"], editors: "owner",
       validations: [daftar("G2:G", KEPUTUSAN_LAIN), hostDariDaftar("B2:B")], formats: [{ range: "A2:A", kind: "tanggal" }, { range: "C2:D", kind: "jam" }],
     },
     {

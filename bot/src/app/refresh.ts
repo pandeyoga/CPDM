@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { applyCorrections, buildLedger, type Correction, type LedgerOptions } from "../domain/ledger.js";
-import { msgEskalasi, msgInputTidakValid, teksStatus } from "../domain/messages.js";
+import { msgEskalasi, msgInputTidakValid, msgJadwalTidakTerbaca, teksStatus } from "../domain/messages.js";
 import { expectedOmzet, hariStreakDiBawah, summarizeHosts, toKreditRows, type HostSummary } from "../domain/rekap.js";
-import { computeTargets, targetHarianRows, type HostTarget, type TargetInputs } from "../domain/targets.js";
-import { addDays, toJakartaHM } from "../domain/time.js";
+import { computeTargets, menitGangguanLive, targetHarianRows, type HostTarget, type TargetInputs } from "../domain/targets.js";
+import { addDays, toJakartaDate, toJakartaHM } from "../domain/time.js";
 import type { LedgerEntry, Report, Settings } from "../domain/types.js";
 import type { Db, OutboxOp } from "../infra/db.js";
 import {
   BARIS_HOST, toSesiRows, type Invalid, type KondisiRow, type KoreksiRow, type SheetOp, type SheetsGateway,
 } from "../infra/sheets.js";
+import { gambarTertunda } from "./handleMessage.js";
 
 /*
  * Refresh: baca input owner, terapkan koreksi dan atribusi yang disetujui, hitung ledger, target, dan rekap, lalu
@@ -32,7 +33,7 @@ export interface InputOwner {
   izin: Array<{ host: string; date: string }>;
   gangguan: Array<{ host: string; date: string; menit: number }>;
   tanpaLive: string[];
-  /** null bila Jadwal aktif = TIDAK. */
+  /** null bila Jadwal aktif = TIDAK, atau jadwal kosong / tak terbaca (mode tanpa jadwal + peringatan owner). */
   jadwal: JadwalRow[] | null;
 }
 
@@ -74,11 +75,27 @@ const KV_INVALID_OWNER = "invalidAktif";
 
 export async function bacaInputOwner(gateway: RefreshGateway): Promise<InputOwner> {
   const settings = await gateway.readSettings();
-  const [koreksi, atribusi, izin, gangguan, tanpaLive, jadwal] = await Promise.all([
+  const [koreksi, atribusi, izin, gangguanJam, tanpaLive, jadwal] = await Promise.all([
     gateway.readKoreksiKeputusan(), gateway.readAtribusi(settings.hosts), gateway.readKehadiran(), gateway.readGangguan(),
-    gateway.readKalenderLive(), settings.jadwalAktif ? gateway.readJadwal() : Promise.resolve(null),
+    gateway.readKalenderLive(), settings.jadwalAktif ? bacaJadwal(gateway) : Promise.resolve(null),
   ]);
+  // Hanya jam gangguan di dalam jam live yang menggugurkan target (I5).
+  const gangguan = gangguanJam.flatMap((g) => {
+    const menit = menitGangguanLive(g.mulai, g.selesai, settings.liveMulai, settings.liveSelesai);
+    return menit > 0 ? [{ host: g.host, date: g.date, menit }] : [];
+  });
   return { settings, koreksi, atribusi, izin, gangguan, tanpaLive, jadwal };
+}
+
+/** Jadwal kosong atau tak terbaca → null (mode tanpa jadwal); refresh memperingatkan owner sekali per hari. */
+async function bacaJadwal(gateway: RefreshGateway): Promise<JadwalRow[] | null> {
+  try {
+    const jadwal = await gateway.readJadwal();
+    return jadwal.length > 0 ? jadwal : null;
+  } catch (e) {
+    console.error(`refresh: jadwal tidak terbaca, memakai mode tanpa jadwal: ${pesanError(e)}`);
+    return null;
+  }
 }
 
 /**
@@ -120,8 +137,9 @@ function hitungRefresh(deps: Pick<RefreshDeps, "db" | "now">, input: InputOwner,
   // Urut waktu: siaran baru lewat tengah malam bisa bertanggal bulan baru sebelum ekor siaran semalam (bulan lalu).
   const entri = [...entriLalu, ...entriBulan].sort((a, b) => a.at.getTime() - b.at.getTime());
 
-  // Laporan yang masih menunggu ekstraksi bisa mengisi celah; masalah baru dicatat setelah antrean itu kosong.
-  if (db.pendingExtract.all().length === 0) catatMasalah(db, entri, deps.now());
+  // Laporan yang masih menunggu ekstraksi bisa mengisi celah; masalah baru dicatat setelah antrean itu kosong. Gambar
+  // yang menunggu nama host menahan masalah tanggal live-nya saja.
+  if (db.pendingExtract.all().length === 0) catatMasalah(db, entri, deps.now(), hariTertahan(db));
   const summaries = summarizeHosts(ledger, ledgerLalu, targets, inp, today, db.problemCounts(bulan));
 
   antreKredit(db, bulanLalu, entriLalu, ledgerLalu);
@@ -136,7 +154,17 @@ function hitungRefresh(deps: Pick<RefreshDeps, "db" | "now">, input: InputOwner,
     teks: msgEskalasi(baru.map((e) => e.host)), wajib: true,
     terkirim: () => { for (const e of baru) db.setKv(`eskalasi:${e.host}`, e.mulai); },
   }];
+  pesanOwner.push(...peringatanJadwal(deps, input, today));
   return { summaries, eskalasiBaru: baru.map((e) => e.host), pesanOwner, input, ledger };
+}
+
+/** Jadwal aktif = YA tapi jadwal kosong/tak terbaca: satu pesan owner per hari, sesudah jam update pagi. */
+function peringatanJadwal(deps: Pick<RefreshDeps, "db" | "now">, input: InputOwner, today: string): PesanOwner[] {
+  const { db } = deps;
+  const k = `jadwalTakTerbaca:${today}`;
+  if (!input.settings.jadwalAktif || input.jadwal !== null || db.getKv(k) !== null) return [];
+  if (toJakartaHM(deps.now()) < input.settings.jamPagi) return [];
+  return [{ teks: msgJadwalTidakTerbaca(), wajib: true, terkirim: () => db.setKv(k, deps.now().toISOString()) }];
 }
 
 function bangunLedger(reports: Report[], input: InputOwner): LedgerEntry[] {
@@ -178,8 +206,17 @@ function pelaku(es: LedgerEntry[], i: number, kind: "belum_lengkap" | "belum_ter
   return x?.host ?? null;
 }
 
-function catatMasalah(db: Db, es: LedgerEntry[], now: Date): void {
+/** Tanggal live gambar yang masih tertunda (laporan sebelum 06:00 bisa ikut hari sebelumnya; keduanya ditahan). */
+function hariTertahan(db: Db): Set<string> {
+  return new Set(gambarTertunda(db).flatMap((g) => {
+    const d = toJakartaDate(g.receivedAt);
+    return toJakartaHM(g.receivedAt) < "06:00" ? [d, addDays(d, -1)] : [d];
+  }));
+}
+
+function catatMasalah(db: Db, es: LedgerEntry[], now: Date, ditahan: Set<string>): void {
   es.forEach((e, i) => {
+    if (ditahan.has(e.date)) return;
     if (e.flags.includes("siaran_belum_lengkap")) db.logProblem(e.messageId, pelaku(es, i, "belum_lengkap"), e.date, "belum_lengkap");
     if (!e.flags.includes("belum_teratribusi")) return;
     const lalai = pelaku(es, i, "belum_teratribusi");

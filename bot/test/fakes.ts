@@ -84,7 +84,8 @@ export function fakeGateway(invalid: Invalid[]) {
     koreksi: [] as Correction[],
     atribusi: new Map<string, Array<{ host: string; share: number }>>(),
     kehadiran: [] as Array<{ host: string; date: string }>,
-    gangguan: [] as Array<{ host: string; date: string; menit: number }>,
+    /** Baris Gangguan yang disetujui (jam HH:MM), seperti parseGangguanRows. */
+    gangguan: [] as Array<{ host: string; date: string; mulai: string; selesai: string }>,
     kalender: [] as string[],
     jadwal: [] as Array<{ date: string; host: string; mulai: string; selesai: string }>,
     kontrol: {} as Record<string, number>,
@@ -106,8 +107,10 @@ export function fakeGateway(invalid: Invalid[]) {
     async readKehadiran() { return g.kehadiran; },
     async readGangguan() { return g.gangguan; },
     async readKalenderLive() { return g.kalender; },
+    gagalJadwal: null as Error | null,
     async readJadwal() {
       g.bacaJadwal++;
+      if (g.gagalJadwal) throw g.gagalJadwal;
       return g.jadwal;
     },
     async readKontrol() { return g.kontrol; },

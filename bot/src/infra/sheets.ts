@@ -279,15 +279,16 @@ export function parseKehadiranRows(rows: Cell[][]): Parsed<Array<{ host: string;
   });
 }
 
-export function parseGangguanRows(rows: Cell[][]): Parsed<Array<{ host: string; date: string; menit: number }>> {
+/** Gangguan disetujui; jam HH:MM (refresh memotongnya ke jam live dengan menitGangguanLive). */
+export function parseGangguanRows(rows: Cell[][]): Parsed<Array<{ host: string; date: string; mulai: string; selesai: string }>> {
   return parseRows(TAB.gangguan, rows, (r) => {
     if (!sama(r[6], KEPUTUSAN_LAIN)) return null;
     const date = wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`);
     const host = wajib(text(r[1]) === "" ? undefined : text(r[1]), "Host kosong");
-    const mulai = wajib(toMinutes(r[2]), `Mulai "${text(r[2])}" tidak valid`);
-    const selesai = wajib(toMinutes(r[3]), `Selesai "${text(r[3])}" tidak valid`);
+    const mulai = wajib(toHM(r[2]), `Mulai "${text(r[2])}" tidak valid`);
+    const selesai = wajib(toHM(r[3]), `Selesai "${text(r[3])}" tidak valid`);
     if (selesai <= mulai) throw new Error("Selesai harus setelah Mulai");
-    return { host, date, menit: selesai - mulai };
+    return { host, date, mulai, selesai };
   });
 }
 
@@ -295,13 +296,35 @@ export function parseKalenderRows(rows: Cell[][]): Parsed<string[]> {
   return parseRows(TAB.kalender, rows, (r) => wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`));
 }
 
+/** Nama header Data Jadwal (tanpa beda huruf besar-kecil); host = "Nama" (file jadwal asli) atau "Host" (JADWAL_HEADERS). */
+const KOLOM_JADWAL = { tanggal: ["tanggal"], host: ["nama", "host"], shift: ["shift"], mulai: ["mulai"], selesai: ["selesai"] } as const;
+
+/**
+ * Data Jadwal: baris header dicari menurut nama kolom (file jadwal asli: header di baris 5 dengan kolom tambahan),
+ * baris sesudahnya dibaca. Shift "OFF" atau Mulai kosong = tidak masuk shift (dilewati). Tanpa header → kosong
+ * (refresh memakai mode tanpa jadwal).
+ */
 export function parseJadwalRows(rows: Cell[][]): Parsed<Array<{ date: string; host: string; mulai: string; selesai: string }>> {
-  return parseRows(TAB.jadwal, rows, (r) => ({
-    date: wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`),
-    host: wajib(text(r[1]) === "" ? undefined : text(r[1]), "Host kosong"),
-    mulai: wajib(toHM(r[2]), `Mulai "${text(r[2])}" tidak valid`),
-    selesai: wajib(toHM(r[3]), `Selesai "${text(r[3])}" tidak valid`),
-  }));
+  const kecil = (c: Cell): string => text(c).toLowerCase();
+  const posisi = (header: string[]) => (nama: readonly string[]): number =>
+    nama.map((n) => header.indexOf(n)).find((i) => i >= 0) ?? -1;
+  const h = rows.findIndex((r) => {
+    const p = posisi(r.map(kecil));
+    return [KOLOM_JADWAL.tanggal, KOLOM_JADWAL.host, KOLOM_JADWAL.mulai, KOLOM_JADWAL.selesai].every((n) => p(n) >= 0);
+  });
+  if (h < 0) return { value: [], invalid: [] };
+  const p = posisi(rows[h]!.map(kecil));
+  const k = { tanggal: p(KOLOM_JADWAL.tanggal), host: p(KOLOM_JADWAL.host), shift: p(KOLOM_JADWAL.shift), mulai: p(KOLOM_JADWAL.mulai), selesai: p(KOLOM_JADWAL.selesai) };
+  const data = parseRows(TAB.jadwal, rows.slice(h), (r) => {
+    if ((k.shift >= 0 && kecil(r[k.shift]) === "off") || blank(r[k.mulai])) return null;
+    return {
+      date: wajib(toDate(r[k.tanggal]), `Tanggal "${text(r[k.tanggal])}" tidak valid`),
+      host: wajib(text(r[k.host]) === "" ? undefined : text(r[k.host]), "Nama host kosong"),
+      mulai: wajib(toHM(r[k.mulai]), `Mulai "${text(r[k.mulai])}" tidak valid`),
+      selesai: wajib(toHM(r[k.selesai]), `Selesai "${text(r[k.selesai])}" tidak valid`),
+    };
+  });
+  return { value: data.value, invalid: data.invalid.map((i) => ({ ...i, row: i.row + h })) };
 }
 
 /* ---------- Pemetaan tulis ---------- */
@@ -486,7 +509,7 @@ export class SheetsGateway {
   readGangguan = async () => this.lapor(parseGangguanRows(await this.read(`${TAB.gangguan}!A:G`)));
   readKalenderLive = async () => this.lapor(parseKalenderRows(await this.read(`${q(TAB.kalender)}!A:B`)));
   readJadwal = async () =>
-    this.lapor(parseJadwalRows(await this.read(`${q(TAB.jadwal)}!A:D`, this.cfg.JADWAL_SPREADSHEET_ID ?? this.id)));
+    this.lapor(parseJadwalRows(await this.read(`${q(TAB.jadwal)}!A:Z`, this.cfg.JADWAL_SPREADSHEET_ID ?? this.id)));
 
   /** Realisasi bulan ini per host dari tab Kontrol (kolom B), untuk pengecekan silang. */
   async readKontrol(): Promise<Record<string, number>> {

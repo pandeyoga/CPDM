@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refresh, type RefreshDeps } from "../src/app/refresh.js";
-import { msgEskalasi } from "../src/domain/messages.js";
+import { msgEskalasi, msgJadwalTidakTerbaca } from "../src/domain/messages.js";
 import type { KreditRow } from "../src/domain/rekap.js";
 import type { Db, OutboxOp } from "../src/infra/db.js";
 import type { Invalid, KoreksiRow } from "../src/infra/sheets.js";
@@ -270,5 +270,69 @@ describe("refresh: Kondisi per baris Pengaturan (fix round 1)", () => {
     await refresh(s.deps, "2026-11-20");
     const kondisi = s.opsBaru().find((o) => o.type === "writeKondisi")!.rows as Array<{ host: string; posisi: number }>;
     expect(kondisi.map((k) => [k.host, k.posisi])).toEqual([["Brando", 0], ["Vanna", 2]]);
+  });
+});
+
+describe("refresh: fix wave (I5 gangguan di jam live, I6 jadwal cadangan, M8 masalah ditahan)", () => {
+  it("I5: menit Gangguan disetujui dipotong ke jam live (07:30–10:00, live 09:00 → 60 menit); di luar jam live tidak dipakai", async () => {
+    const s = setup(J("2026-11-20", "11:00"));
+    s.g.gangguan = [
+      { host: "Brando", date: "2026-11-20", mulai: "07:30", selesai: "10:00" },
+      { host: "Vanna", date: "2026-11-20", mulai: "06:00", selesai: "08:00" },
+    ];
+    const r = await refresh(s.deps, "2026-11-20");
+    expect(r.input.gangguan).toEqual([{ host: "Brando", date: "2026-11-20", menit: 60 }]);
+  });
+
+  it("I6: Jadwal aktif tapi jadwal kosong/tak terbaca → mode tanpa jadwal + satu peringatan owner per hari (setelah jam pagi)", async () => {
+    const s = setup(J("2026-11-20", "07:00"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    s.g.settings = { ...s.g.settings, jadwalAktif: true };
+    s.g.jadwal = [];
+    let r = await refresh(s.deps, "2026-11-20");
+    expect(r.input.jadwal).toBeNull();
+    expect(r.summaries.map((x) => x.host)).toEqual(["Brando", "Vanna", "Linda"]);
+    expect(r.summaries.every((x) => x.target > 0)).toBe(true); // target dibagi rata, bukan per shift
+    expect(r.pesanOwner).toEqual([]); // sebelum jam update pagi
+
+    s.pada(J("2026-11-20", "08:15"));
+    r = await refresh(s.deps, "2026-11-20");
+    expect(r.pesanOwner.map((p) => [p.teks, p.wajib])).toEqual([[msgJadwalTidakTerbaca(), true]]);
+    r.pesanOwner[0]!.terkirim();
+
+    s.g.gagalJadwal = new Error("403 tidak punya akses ke file jadwal");
+    s.pada(J("2026-11-20", "09:00"));
+    r = await refresh(s.deps, "2026-11-20");
+    expect(r.input.jadwal).toBeNull();
+    expect(r.pesanOwner).toEqual([]); // sudah dikirim hari ini
+
+    s.pada(J("2026-11-21", "09:00"));
+    r = await refresh(s.deps, "2026-11-21");
+    expect(r.pesanOwner.map((p) => p.teks)).toEqual([msgJadwalTidakTerbaca()]);
+
+    s.g.gagalJadwal = null;
+    s.g.jadwal = [{ date: "2026-11-21", host: "Brando", mulai: "09:00", selesai: "15:00" }];
+    s.pada(J("2026-11-21", "09:15"));
+    r = await refresh(s.deps, "2026-11-21");
+    expect(r.input.jadwal).toEqual(s.g.jadwal);
+    expect(r.pesanOwner).toEqual([]);
+  });
+
+  it("M8: masalah laporan hari itu ditahan selama ada gambar hari itu yang menunggu nama host", async () => {
+    const s = setup(J("2026-11-20", "13:00"));
+    simpan(s.db,
+      laporan("m1", "Brando", J("2026-11-20", "10:00"), 800_000),
+      laporan("m2", "Vanna", J("2026-11-20", "12:00"), 300_000)); // omzet turun tanpa layar akhir
+    const tunda = (id: string, at: Date): void => {
+      s.db.pendingCaption.put(id, "u", "");
+      s.db.setKv(`gambar:${id}`, JSON.stringify({ messageId: id, receivedAt: at.toISOString(), caption: "", mediaUrl: "u", path: "", mime: "", enqueuedAt: at.toISOString() }));
+    };
+    tunda("lain", J("2026-11-19", "15:00")); // hari lain tidak menahan
+    tunda("m9", J("2026-11-20", "12:30"));
+    await refresh(s.deps, "2026-11-20");
+    expect(s.db.problemCounts("2026-11")).toEqual({});
+    s.db.pendingCaption.take("m9");
+    await refresh(s.deps, "2026-11-20");
+    expect(s.db.problemCounts("2026-11")).toEqual({ Brando: 1 });
   });
 });
