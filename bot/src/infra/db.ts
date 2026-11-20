@@ -64,11 +64,37 @@ CREATE TABLE IF NOT EXISTS problems (
 );
 `;
 
+/**
+ * Migrasi skema (PRAGMA user_version): MIGRASI[i] membawa db dari versi i ke i+1. Perubahan skema berikutnya
+ * ditambahkan di ujung daftar, tidak pernah mengubah langkah lama. 0 → 1 = skema awal (IF NOT EXISTS, jadi db
+ * lama tanpa versi ikut naik tanpa kehilangan data).
+ */
+export type Migrasi = (db: Database.Database) => void;
+export const MIGRASI: readonly Migrasi[] = [(db) => db.exec(SCHEMA)];
+export const VERSI_SKEMA = MIGRASI.length;
+
+/** Jalankan langkah yang belum diterapkan, masing-masing dalam satu transaksi; db dari versi lebih baru ditolak. */
+export function jalankanMigrasi(db: Database.Database, langkah: readonly Migrasi[] = MIGRASI): void {
+  const versi = db.pragma("user_version", { simple: true }) as number;
+  if (versi > langkah.length) throw new Error(`Skema db versi ${versi} lebih baru dari bot (versi ${langkah.length})`);
+  for (let v = versi; v < langkah.length; v++) {
+    db.transaction(() => {
+      langkah[v]!(db);
+      db.pragma(`user_version = ${v + 1}`);
+    })();
+  }
+}
+
 export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
   const now = opts.now ?? (() => new Date());
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
-  db.exec(SCHEMA);
+  try {
+    jalankanMigrasi(db);
+  } catch (e) {
+    db.close();
+    throw e;
+  }
 
   const q = {
     mark: db.prepare("INSERT OR IGNORE INTO processed (id, ts) VALUES (?, ?)"),

@@ -23,4 +23,7 @@ COPY test/fixtures/screens ./test/fixtures/screens
 RUN mkdir -p /data && chown node:node /data
 USER node
 EXPOSE 3000
+# Sehat = server menjawab GET /health (node:22-slim tanpa curl/wget, jadi pakai fetch Node).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 CMD ["node", "dist/src/server.js"]

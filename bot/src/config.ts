@@ -3,10 +3,12 @@ import { z } from "zod";
 const nonEmpty = z.string().min(1);
 
 const schema = z.object({
-  WAHA_URL: nonEmpty,
+  /** http(s)://host[:port] — nama layanan Docker tanpa titik (mis. http://waha:3000) boleh. */
+  WAHA_URL: z.url({ protocol: /^https?$/ }),
   WAHA_API_KEY: nonEmpty,
   WAHA_SESSION: nonEmpty,
-  LIVE_GROUP_ID: nonEmpty,
+  /** Id grup WhatsApp, mis. 120363xxxxxxxx@g.us. */
+  LIVE_GROUP_ID: z.string().regex(/^[^@\s]+@g\.us$/),
   ANTHROPIC_API_KEY: nonEmpty,
   GOOGLE_CLIENT_ID: nonEmpty,
   GOOGLE_CLIENT_SECRET: nonEmpty,
@@ -28,7 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
     const names = [...new Set(parsed.error.issues.map((i) => String(i.path[0])))];
-    throw new Error(`Variabel lingkungan hilang atau kosong: ${names.join(", ")}`);
+    throw new Error(`Variabel lingkungan hilang, kosong, atau formatnya salah: ${names.join(", ")}`);
   }
   return parsed.data;
 }

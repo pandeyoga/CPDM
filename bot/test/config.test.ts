@@ -50,3 +50,17 @@ describe("loadConfig: server (Task 12)", () => {
     expect(() => loadConfig({ ...full, PORT: "abc" })).toThrow(/PORT/);
   });
 });
+
+describe("loadConfig: validasi format (M11)", () => {
+  it("WAHA_URL harus URL http(s)", () => {
+    for (const bad of ["localhost:3000", "bukan url", "ftp://waha:21"]) {
+      expect(() => loadConfig({ ...full, WAHA_URL: bad }), bad).toThrow(/WAHA_URL/);
+    }
+    expect(loadConfig({ ...full, WAHA_URL: "http://waha:3000" }).WAHA_URL).toBe("http://waha:3000");
+  });
+  it("LIVE_GROUP_ID harus id grup (@g.us)", () => {
+    for (const bad of ["628123456789@c.us", "120363000000000000", "@g.us"]) {
+      expect(() => loadConfig({ ...full, LIVE_GROUP_ID: bad }), bad).toThrow(/LIVE_GROUP_ID/);
+    }
+  });
+});

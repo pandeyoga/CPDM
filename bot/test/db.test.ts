@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb, type Db } from "../src/infra/db.js";
+import Database from "better-sqlite3";
+import { jalankanMigrasi, MIGRASI, openDb, VERSI_SKEMA, type Db } from "../src/infra/db.js";
 import { jakartaDateTime } from "../src/domain/time.js";
 import type { PlatformReading, Report } from "../src/domain/types.js";
 
@@ -195,5 +196,48 @@ describe("db", () => {
     expect(db.problemCounts("2026-11")).toEqual({ Ani: 2, Budi: 2 });
     expect(db.problemCounts("2026-12")).toEqual({ Ani: 1 });
     expect(db.problemCounts("2027-01")).toEqual({});
+  });
+});
+
+describe("versi skema (T8)", () => {
+  const berkas = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "db-versi-"));
+    dirs.push(dir);
+    return join(dir, "t.sqlite");
+  };
+  const versi = (path: string): number => {
+    const raw = new Database(path);
+    const v = raw.pragma("user_version", { simple: true }) as number;
+    raw.close();
+    return v;
+  };
+
+  it("db baru dan db lama tanpa versi (0) naik ke versi 1; data lama tetap", () => {
+    expect(VERSI_SKEMA).toBe(1);
+    const baru = berkas();
+    openDb(baru).close();
+    expect(versi(baru)).toBe(1);
+
+    const lama = berkas();
+    const raw = new Database(lama);
+    raw.exec("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT NOT NULL); INSERT INTO kv VALUES ('a', 'lama');");
+    raw.close();
+    const db = openDb(lama);
+    dbs.push(db);
+    expect(db.getKv("a")).toBe("lama");
+    expect(db.markMessage("x", new Date())).toBe(true);
+    expect(versi(lama)).toBe(1);
+  });
+
+  it("hook migrasi: langkah berikutnya dijalankan sekali, berurutan; versi lebih baru dari bot ditolak", () => {
+    const path = berkas();
+    const raw = new Database(path);
+    const langkah = [...MIGRASI, (d: Database.Database) => d.exec("ALTER TABLE kv ADD COLUMN catatan TEXT")];
+    jalankanMigrasi(raw, langkah);
+    jalankanMigrasi(raw, langkah); // tidak dijalankan dua kali
+    expect(raw.pragma("user_version", { simple: true })).toBe(2);
+    expect((raw.prepare("PRAGMA table_info(kv)").all() as Array<{ name: string }>).map((c) => c.name)).toContain("catatan");
+    raw.close();
+    expect(() => openDb(path)).toThrow(/versi 2/);
   });
 });

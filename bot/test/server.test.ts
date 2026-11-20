@@ -72,3 +72,13 @@ describe("GET /health", () => {
     expect(await res.json()).toEqual({ ok: true, waStatus: "WORKING" });
   });
 });
+
+describe("Dockerfile (M11)", () => {
+  it("HEALTHCHECK memanggil GET /health di port PORT", () => {
+    const docker = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+    const baris = docker.split("\n").filter((b) => /^HEALTHCHECK\b/.test(b) || /^\s+CMD\b/.test(b)).join(" ");
+    expect(baris).toMatch(/^HEALTHCHECK /);
+    expect(baris).toContain("/health");
+    expect(baris).toContain("process.env.PORT");
+  });
+});
