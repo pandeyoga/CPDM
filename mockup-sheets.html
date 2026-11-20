@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><title>Format Spreadsheet CP</title>
+<style>
+:root{--page:#f1f1ee;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--auto:#f4f4f1;--hdr:#e9e8e3;
+--ok:#0a7d3b;--okbg:#e5f4ea;--warn:#8a5a00;--warnbg:#fdf2d8;--bad:#b42323;--badbg:#fbe4e4;--blue:#2a78d6;--blueBg:#eaf2fc;--kon:#eb6834}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+.file{width:1280px;padding:22px 24px 18px;background:var(--page)}
+.fhead{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
+.fhead h1{font-size:19px;margin:0;font-weight:650}
+.perm{font-size:11.5px;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid var(--grid);color:var(--ink2)}
+.fsub{font-size:12.5px;color:var(--ink2);margin:0 0 10px}
+.sheet{background:#fff;border:1px solid #d6d5cf;border-radius:8px;overflow:hidden;margin-bottom:12px}
+.tabname{display:flex;justify-content:space-between;align-items:center;background:#fafaf8;border-bottom:1px solid var(--grid);padding:7px 12px;font-size:12.5px;font-weight:650}
+.tabname span{font-weight:400;color:var(--ink2);font-size:11.5px}
+table{border-collapse:collapse;width:100%;font-size:11.5px}
+th,td{border:1px solid var(--grid);padding:5px 7px;text-align:left;white-space:nowrap}
+th{background:var(--hdr);font-weight:650;font-size:11px;color:#2c2c2a}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+td.auto{background:var(--auto)}
+td.in{background:#fff}
+th.in{background:#dbe8f9}
+.ok{background:var(--okbg)!important;color:var(--ok);font-weight:600}
+.warn{background:var(--warnbg)!important;color:var(--warn);font-weight:600}
+.bad{background:var(--badbg)!important;color:var(--bad);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid var(--grid)}
+.kpi{padding:10px 12px;border-right:1px solid var(--grid)}
+.kpi:last-child{border-right:0}
+.kpi .l{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.kpi .v{font-size:20px;font-weight:650;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:11.5px;color:var(--ink2)}
+.bar{height:6px;background:#eceae4;border-radius:3px;position:relative;margin-top:6px;width:120px;display:inline-block;vertical-align:middle}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--blue)}
+.bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#0b0b0b}
+.tabs{display:flex;gap:2px;background:#e9e8e3;padding:4px 8px 0;border-top:1px solid #d6d5cf}
+.tabs div{font-size:11.5px;padding:5px 12px;border-radius:6px 6px 0 0;color:var(--ink2);background:#f4f4f1}
+.tabs div.a{background:#fff;color:var(--ink);font-weight:650}
+.tabs div .lk{font-size:10px;margin-left:4px}
+.legend{display:flex;gap:16px;font-size:11.5px;color:var(--ink2);margin:0 0 10px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:12px;border:1px solid var(--grid);vertical-align:-2px;margin-right:5px;border-radius:2px}
+.two{display:grid;grid-template-columns:1.25fr 1fr;gap:12px}
+.note{font-size:11.5px;color:var(--ink2);padding:7px 12px;border-top:1px solid var(--grid);background:#fafaf8}
+.chip{display:inline-block;padding:1px 6px;border-radius:999px;font-size:10.5px;font-weight:600}
+</style></head><body>
+
+<!-- ===================== LIVE TRACKER ===================== -->
+<div class="file" id="live">
+ <div class="fhead"><h1>📊 CP – Live Tracker</h1><span class="perm">✏️ Owner: hanya tab Pengaturan & Koreksi · 🤖 Bot menulis data · 👁 lainnya lihat saja</span></div>
+ <p class="fsub">Contoh data · posisi per Jumat 20 Nov 2026 · Target November Rp60.000.000 (diisi owner) · saklar Jadwal aktif = TIDAK</p>
+ <div class="legend"><span><i style="background:#dbe8f9"></i>Kolom input (boleh diisi)</span><span><i style="background:var(--auto)"></i>Otomatis — terkunci, rumus tidak bisa rusak</span><span><i style="background:var(--okbg)"></i>Sesuai/di atas jalur</span><span><i style="background:var(--warnbg)"></i>Tertinggal ≤10%</span><span><i style="background:var(--badbg)"></i>Tertinggal &gt;10% / perlu tindakan</span></div>
+
+ <div class="sheet">
+  <div class="tabname">Tab: Dashboard Host <span>👁 lihat saja · diperbarui otomatis setiap ada laporan</span></div>
+  <div class="kpis">
+   <div class="kpi"><div class="l">Omzet live Nov (1–20)</div><div class="v">Rp37,9 jt</div><div class="s">dari target Rp60 jt</div></div>
+   <div class="kpi"><div class="l">Tercapai vs seharusnya</div><div class="v">63,2% <span style="font-size:13px;color:var(--warn)">/ 66,7%</span></div><div class="s">⚠️ kurang Rp2,1 jt dari jalur</div></div>
+   <div class="kpi"><div class="l">Butuh per hari (tim)</div><div class="v">Rp2,2 jt</div><div class="s">sisa 10 hari · rata-rata sejauh ini Rp1,9 jt</div></div>
+   <div class="kpi"><div class="l">vs Oktober (1–20)</div><div class="v" style="color:var(--ok)">+5,0%</div><div class="s">Okt 1–20: Rp36,1 jt</div></div>
+   <div class="kpi"><div class="l">Per platform</div><div class="v" style="font-size:15px">TikTok Rp14,6 jt*</div><div class="s">Shopee Rp23,3 jt · *perkiraan (dibulatkan)</div></div>
+  </div>
+  <table>
+   <tr><th>Host</th><th>Target bulan</th><th>Realisasi</th><th>Progres (garis = seharusnya)</th><th>% vs seharusnya</th><th>Selisih jalur</th><th>Butuh/hari kerja</th><th>vs Okt 1–20</th><th>Jam on-air</th><th>Omzet/jam</th><th>Konversi</th><th>Disiplin lapor</th><th>Status</th></tr>
+   <tr><td><b>Brando</b></td><td class="auto n">Rp20,0 jt</td><td class="auto n">Rp11,2 jt</td><td class="auto"><span class="bar"><i style="width:56%"></i><b style="left:66.7%"></b></span> 56%</td><td class="auto n">56% / 66,7%</td><td class="n bad">−Rp2,1 jt</td><td class="auto n">Rp1,0 jt</td><td class="n bad">−9,7%</td><td class="auto n">82 j</td><td class="auto n">Rp137 rb</td><td class="auto n">1,6%</td><td class="n warn">94%</td><td class="bad">🔴 tertinggal 3 hari</td></tr>
+   <tr><td><b>Vanna</b></td><td class="auto n">Rp20,0 jt</td><td class="auto n">Rp14,1 jt</td><td class="auto"><span class="bar"><i style="width:70.5%"></i><b style="left:66.7%"></b></span> 70,5%</td><td class="auto n">70,5% / 66,7%</td><td class="n ok">+Rp0,8 jt</td><td class="auto n">Rp0,7 jt</td><td class="n ok">+8,1%</td><td class="auto n">82 j</td><td class="auto n">Rp172 rb</td><td class="auto n">1,9%</td><td class="n ok">100%</td><td class="ok">✅ sesuai jalur</td></tr>
+   <tr><td><b>Linda</b></td><td class="auto n">Rp20,0 jt</td><td class="auto n">Rp12,6 jt</td><td class="auto"><span class="bar"><i style="width:63%"></i><b style="left:66.7%"></b></span> 63%</td><td class="auto n">63% / 66,7%</td><td class="n warn">−Rp0,7 jt</td><td class="auto n">Rp0,9 jt</td><td class="n ok">+3,2%</td><td class="auto n">82 j</td><td class="auto n">Rp154 rb</td><td class="auto n">1,7%</td><td class="n warn">88%</td><td class="warn">⚠️ sedikit tertinggal</td></tr>
+  </table>
+  <div class="note">Data perlu perhatian: 1 koreksi menunggu persetujuan · 1 siaran belum lengkap (Shopee 18 Nov) · 0 belum teratribusi → lihat tab <b>Koreksi &amp; Atribusi</b></div>
+ </div>
+
+ <div class="two">
+  <div class="sheet">
+   <div class="tabname">Tab: Sesi Live <span>🤖 diisi bot dari screenshot grup · 👁 lihat saja</span></div>
+   <table>
+    <tr><th>Tgl</th><th>Jam</th><th>Host</th><th>Platform</th><th>Siaran</th><th>Angka layar</th><th>+Omzet</th><th>+Pesanan</th><th>Keterangan</th><th>Bukti</th></tr>
+    <tr><td class="auto">20/11</td><td class="auto">12:02</td><td class="auto">Brando</td><td class="auto">TikTok</td><td class="auto">#1</td><td class="auto n">Rp410rb</td><td class="auto n">+410.000</td><td class="auto n">+5</td><td class="auto">dibulatkan</td><td class="auto">🔗</td></tr>
+    <tr><td class="auto">20/11</td><td class="auto">12:02</td><td class="auto">Brando</td><td class="auto">Shopee</td><td class="auto">#1</td><td class="auto n">Rp620.500</td><td class="auto n">+620.500</td><td class="auto n">+6</td><td class="ok">OK</td><td class="auto">🔗</td></tr>
+    <tr><td class="auto">20/11</td><td class="auto">14:31</td><td class="auto">Vanna</td><td class="auto">TikTok</td><td class="auto">#1</td><td class="auto n">Rp690rb</td><td class="auto n">+280.000</td><td class="auto n">+3</td><td class="auto">dibulatkan</td><td class="auto">🔗</td></tr>
+    <tr><td class="auto">20/11</td><td class="auto">15:10</td><td class="auto">Vanna</td><td class="auto">Shopee</td><td class="auto">#1 akhir</td><td class="auto n">Rp905.000</td><td class="auto n">+284.500</td><td class="auto n">+3</td><td class="warn">live mati – layar akhir</td><td class="auto">🔗</td></tr>
+    <tr><td class="auto">20/11</td><td class="auto">16:30</td><td class="auto">Vanna</td><td class="auto">Shopee</td><td class="auto">#2</td><td class="auto n">Rp210.000</td><td class="auto n">+210.000</td><td class="auto n">+2</td><td class="auto">siaran baru</td><td class="auto">🔗</td></tr>
+    <tr><td class="auto">20/11</td><td class="auto">17:05</td><td class="auto">Linda</td><td class="auto">TikTok</td><td class="auto">#1</td><td class="auto n">Rp1,1jt</td><td class="auto n">+410.000</td><td class="auto n">+4</td><td class="warn">koreksi menunggu</td><td class="auto">🔗</td></tr>
+   </table>
+  </div>
+  <div class="sheet">
+   <div class="tabname">Tab: Koreksi &amp; Atribusi <span>✏️ owner mengisi kolom biru</span></div>
+   <table>
+    <tr><th>Tgl</th><th>Host</th><th>Masalah</th><th>Angka bot</th><th>Usulan</th><th class="in">Keputusan ✏️</th></tr>
+    <tr><td class="auto">20/11</td><td class="auto">Linda</td><td class="auto">Koreksi: "GMV 1,15jt"</td><td class="auto n">Rp1,1jt</td><td class="auto n">Rp1,15jt</td><td class="in">Setujui ▾</td></tr>
+    <tr><td class="auto">18/11</td><td class="auto">Brando</td><td class="auto">Siaran belum lengkap</td><td class="auto n">?</td><td class="auto">minta riwayat live</td><td class="in">Tunggu ▾</td></tr>
+   </table>
+   <div class="tabname" style="border-top:1px solid var(--grid)">Tab: Pengaturan <span>✏️ hanya owner</span></div>
+   <table>
+    <tr><th>Pengaturan</th><th class="in">Nilai ✏️</th></tr>
+    <tr><td class="auto">Target omzet live – Nov 2026</td><td class="in n">Rp60.000.000</td></tr>
+    <tr><td class="auto">Jadwal aktif</td><td class="in">TIDAK ▾</td></tr>
+    <tr><td class="auto">Jam update pagi · rekap malam</td><td class="in">08:00 · 22:30</td></tr>
+    <tr><td class="auto">Host (nama · no. WA)</td><td class="in">Brando · Vanna · Linda</td></tr>
+   </table>
+  </div>
+ </div>
+
+ <div class="sheet">
+  <div class="tabname">Tab: Harian per Host <span>👁 lihat saja · target harian dirinci otomatis dari target bulan</span></div>
+  <table>
+   <tr><th>Host</th><th>Sen 16</th><th>Sel 17</th><th>Rab 18</th><th>Kam 19</th><th>Jum 20</th><th>Target/hari</th><th>Hari di bawah target (7 hr)</th></tr>
+   <tr><td><b>Brando</b></td><td class="n warn">Rp690rb</td><td class="n bad">Rp540rb</td><td class="n bad">Rp610rb</td><td class="auto n">libur</td><td class="n bad">Rp580rb</td><td class="auto n">Rp770rb</td><td class="bad">4 hari · 3 berturut ⚠️ owner dikabari</td></tr>
+   <tr><td><b>Vanna</b></td><td class="n ok">Rp880rb</td><td class="n ok">Rp910rb</td><td class="auto n">libur</td><td class="n ok">Rp820rb</td><td class="n ok">Rp974rb</td><td class="auto n">Rp770rb</td><td class="ok">0 hari</td></tr>
+   <tr><td><b>Linda</b></td><td class="n ok">Rp790rb</td><td class="auto n">libur</td><td class="n warn">Rp700rb</td><td class="n ok">Rp800rb</td><td class="n warn">Rp720rb</td><td class="auto n">Rp770rb</td><td class="warn">2 hari</td></tr>
+  </table>
+ </div>
+ <div class="tabs"><div class="a">Dashboard Host</div><div>Harian per Host</div><div>Sesi Live</div><div>Koreksi &amp; Atribusi</div><div>Rapor Host</div><div>Pengaturan</div><div>Log Bot<span class="lk">🔒</span></div></div>
+</div>
+
+<!-- ===================== CONTENT TRACKER ===================== -->
+<div class="file" id="konten">
+ <div class="fhead"><h1>📊 CP – Content Tracker</h1><span class="perm">✏️ Planner & editor: kolom biru di Papan Konten & Bank Ide · ✏️ Owner: Pengaturan · 👁 lainnya lihat saja</span></div>
+ <p class="fsub">Contoh data · Minggu 47 (16–22 Nov 2026) · target 14 video + 14 feed per minggu</p>
+ <div class="legend"><span><i style="background:#dbe8f9"></i>Diisi planner / editor</span><span><i style="background:var(--auto)"></i>Otomatis — terkunci</span><span><i style="background:var(--okbg)"></i>Tepat waktu</span><span><i style="background:var(--warnbg)"></i>Kurang / mepet</span><span><i style="background:var(--badbg)"></i>Telat</span></div>
+ <div class="sheet">
+  <div class="tabname">Tab: Output Mingguan <span>👁 lihat saja · dihitung dari Papan Konten, Bank Ide, Form & folder Tarikan</span></div>
+  <table>
+   <tr><th>Staff</th><th>Tahap / hasil kerja</th><th>Target</th><th>Hasil</th><th>Batas</th><th>Masuk</th><th>Status</th></tr>
+   <tr><td rowspan="6"><b>Content planner</b></td><td class="auto">Sen · Tarikan data + Form analisis</td><td class="auto n">2 file + 1 form</td><td class="auto n">2 + 1</td><td class="auto">Sen 12:00</td><td class="auto">Sen 11:40</td><td class="ok">✅ tepat waktu</td></tr>
+   <tr><td class="auto">Sel · Bank ide (video + feed)</td><td class="auto n">20 + 20</td><td class="auto n">22 + 18</td><td class="auto">Sel 17:00</td><td class="auto">Sel 16:55</td><td class="warn">⚠️ feed kurang 2</td></tr>
+   <tr><td class="auto">Rab · Script (kumulatif)</td><td class="auto n">7 + 7</td><td class="auto n">5 + 7</td><td class="auto">Rab 17:00</td><td class="auto">Rab 19:20</td><td class="bad">🔴 telat 2 j 20 m</td></tr>
+   <tr><td class="auto">Kam · Script lengkap → disetujui owner</td><td class="auto n">14 + 14</td><td class="auto n">14 + 14</td><td class="auto">Kam 17:00</td><td class="auto">Kam 16:30</td><td class="ok">✅ tepat waktu</td></tr>
+   <tr><td class="auto">Jum · Tersuting</td><td class="auto n">7</td><td class="auto n">8</td><td class="auto">Jum 18:00</td><td class="auto">Jum 17:10</td><td class="ok">✅</td></tr>
+   <tr><td class="auto">Sab · Tersuting + kalender</td><td class="auto n">14</td><td class="auto n">–</td><td class="auto">Sab 18:00</td><td class="auto">–</td><td class="auto">⏳ belum jatuh tempo</td></tr>
+   <tr><td rowspan="2"><b>Editor</b></td><td class="auto">Video diedit (batch Minggu 46)</td><td class="auto n">14</td><td class="auto n">11</td><td class="auto">Kam 17:00</td><td class="auto">–</td><td class="bad">🔴 kurang 3, lewat batas</td></tr>
+   <tr><td class="auto">Feed didesain (batch Minggu 46)</td><td class="auto n">14</td><td class="auto n">14</td><td class="auto">Kam 17:00</td><td class="auto">Kam 15:00</td><td class="ok">✅</td></tr>
+   <tr><td><b>Tayang</b></td><td class="auto">Konten tayang minggu ini (16–20 Nov)</td><td class="auto n">10 + 10</td><td class="auto n">10 + 9</td><td class="auto">harian 21:00</td><td class="auto">–</td><td class="warn">⚠️ 1 feed Rab belum tayang</td></tr>
+  </table>
+ </div>
+ <div class="sheet">
+  <div class="tabname">Tab: Papan Konten <span>✏️ planner/editor mengisi kolom biru · kolom abu terkunci</span></div>
+  <table>
+   <tr><th>Kode</th><th>Jenis</th><th class="in">Pilar ✏️</th><th class="in">Hook ✏️</th><th class="in">Produk ✏️</th><th class="in">Status ✏️</th><th class="in">PIC ✏️</th><th>Deadline</th><th class="in">Rencana tayang ✏️</th><th class="in">Link TikTok ✏️</th><th class="in">Link IG ✏️</th><th>Views final*</th><th>Saves*</th></tr>
+   <tr><td class="auto">CP-V-4601</td><td class="auto">Video</td><td class="in">Perbandingan</td><td class="in">"Tim A atau B"</td><td class="in">Versace Eros</td><td class="in ok">Tayang</td><td class="in">Planner</td><td class="auto">–</td><td class="in">16/11 12:00</td><td class="in">🔗</td><td class="in">🔗</td><td class="auto n">3.422</td><td class="auto n">17</td></tr>
+   <tr><td class="auto">CP-V-4602</td><td class="auto">Video</td><td class="in">Skit humor</td><td class="in">POV kerja</td><td class="in">–</td><td class="in ok">Tayang</td><td class="in">Planner</td><td class="auto">–</td><td class="in">16/11 18:00</td><td class="in">🔗</td><td class="in">–</td><td class="auto n">1.096</td><td class="auto n">2</td></tr>
+   <tr><td class="auto">CP-V-4709</td><td class="auto">Video</td><td class="in">Rekomendasi</td><td class="in">"Buat dating"</td><td class="in">Maison Margiela</td><td class="in warn">Diedit</td><td class="in">Editor</td><td class="bad">Kam 19/11 ⏰</td><td class="in">25/11 12:00</td><td class="in"></td><td class="in"></td><td class="auto n"></td><td class="auto n"></td></tr>
+   <tr><td class="auto">CP-F-4805</td><td class="auto">Feed</td><td class="in">Edukasi notes</td><td class="in">"Notes wangi"</td><td class="in">Kenjo L'eau</td><td class="in">Brief</td><td class="in">Planner</td><td class="auto">Kam 26/11</td><td class="in">30/11 07:00</td><td class="in"></td><td class="in"></td><td class="auto n"></td><td class="auto n"></td></tr>
+  </table>
+  <div class="note">* Views final &amp; Saves terisi otomatis dari export TikTok/IG yang diunggah planner (dicocokkan lewat link). Sel kosong = data belum ada, bukan 0.</div>
+ </div>
+ <div class="tabs"><div class="a">Output Mingguan</div><div>Papan Konten</div><div>Kalender</div><div>Bank Ide</div><div>Data Konten</div><div>Laporan Planner</div><div>Rapor Konten</div><div>Pengaturan</div><div>Raw TikTok<span class="lk">🔒</span></div><div>Raw IG<span class="lk">🔒</span></div></div>
+</div>
+
+<!-- ===================== MANAGEMENT ===================== -->
+<div class="file" id="mgmt">
+ <div class="fhead"><h1>📊 CP – Management</h1><span class="perm">👁 Semua orang lihat saja · tidak bisa diedit · opsi: tidak bisa diunduh/disalin</span></div>
+ <p class="fsub">Contoh data · November 2026 (1–20) · diperbarui otomatis dari Live Tracker &amp; Content Tracker</p>
+ <div class="sheet">
+  <div class="kpis">
+   <div class="kpi"><div class="l">Omzet live</div><div class="v">Rp37,9 jt</div><div class="s">63% dari Rp60 jt · jalur 66,7% ⚠️</div></div>
+   <div class="kpi"><div class="l">vs bulan lalu (1–20)</div><div class="v" style="color:var(--ok)">+5,0%</div><div class="s">Okt: Rp36,1 jt</div></div>
+   <div class="kpi"><div class="l">Output konten (bulan)</div><div class="v">38 + 37</div><div class="s">video + feed · target s/d hari ini 40 + 40</div></div>
+   <div class="kpi"><div class="l">Views konten (final)</div><div class="v">41,2 rb</div><div class="s">TikTok 29,8 rb · IG 11,4 rb</div></div>
+   <div class="kpi"><div class="l">Disiplin tim</div><div class="v">93%</div><div class="s">laporan &amp; deadline tepat waktu</div></div>
+  </div>
+  <div class="two" style="gap:0">
+   <table style="border-right:1px solid var(--grid)">
+    <tr><th>Host</th><th>Realisasi</th><th>% target</th><th>vs Okt</th><th>Omzet/jam</th><th>Status</th></tr>
+    <tr><td><b>Brando</b></td><td class="auto n">Rp11,2 jt</td><td class="auto n">56%</td><td class="n bad">−9,7%</td><td class="auto n">Rp137 rb</td><td class="bad">🔴</td></tr>
+    <tr><td><b>Vanna</b></td><td class="auto n">Rp14,1 jt</td><td class="auto n">70,5%</td><td class="n ok">+8,1%</td><td class="auto n">Rp172 rb</td><td class="ok">✅</td></tr>
+    <tr><td><b>Linda</b></td><td class="auto n">Rp12,6 jt</td><td class="auto n">63%</td><td class="n ok">+3,2%</td><td class="auto n">Rp154 rb</td><td class="warn">⚠️</td></tr>
+   </table>
+   <table>
+    <tr><th>Konten</th><th>Nilai</th><th>Catatan</th></tr>
+    <tr><td>Format terbaik</td><td class="auto">Perbandingan "Tim A/B"</td><td class="auto">views 1,7× skit</td></tr>
+    <tr><td>Top konten minggu 46</td><td class="auto">CP-V-4601</td><td class="auto">3.422 views · 17 saves</td></tr>
+    <tr><td>Planner · Editor</td><td class="warn">⚠️ · 🔴</td><td class="auto">script telat 1× · edit kurang 3</td></tr>
+   </table>
+  </div>
+  <table>
+   <tr><th>Laporan</th><th>Tanggal</th><th>Link</th></tr>
+   <tr><td>Analisis Mingguan – Minggu 47</td><td class="auto">Sen 23 Nov</td><td class="auto">📄 buka</td></tr>
+   <tr><td>Evaluasi Bulanan – Oktober 2026</td><td class="auto">5 Nov</td><td class="auto">📄 buka</td></tr>
+  </table>
+ </div>
+ <div class="tabs"><div class="a">Ringkasan</div><div>Tren Bulanan</div><div>Laporan</div></div>
+</div>
+</body></html>

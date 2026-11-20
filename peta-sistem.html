@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><title>Peta Sistem CP</title>
+<style>
+:root{--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--ring:rgba(11,11,11,.10);
+--live:#2a78d6;--liveBg:#eaf2fc;--kon:#eb6834;--konBg:#fdeee7;--ai:#6250d6;--aiBg:#efedfb;--grid:#e1e0d9}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+.wrap{width:1280px;padding:28px}
+h1{font-size:22px;margin:0 0 4px;font-weight:650}
+.sub{font-size:13.5px;color:var(--ink2);margin:0 0 18px}
+.heads{display:grid;grid-template-columns:120px 1fr 28px 1fr 28px 1fr 28px 1fr;gap:0;margin-bottom:6px}
+.heads div{font-size:11.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.lane{display:grid;grid-template-columns:120px 1fr 28px 1fr 28px 1fr 28px 1fr;align-items:stretch;margin-bottom:12px}
+.lname{display:flex;flex-direction:column;justify-content:center;padding-right:10px}
+.lname b{font-size:15px}
+.lname span{font-size:11.5px;color:var(--ink2)}
+.box{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.45;color:var(--ink2)}
+.box h3{margin:0 0 4px;font-size:13px;color:var(--ink);font-weight:650}
+.box ul{margin:0;padding-left:16px}
+.arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:18px}
+.live .box{border-left:4px solid var(--live)}
+.kon .box{border-left:4px solid var(--kon)}
+.live .lname b{color:var(--live)} .kon .lname b{color:var(--kon)}
+.ai{display:grid;grid-template-columns:120px 1fr;margin:4px 0 12px}
+.aibox{background:var(--aiBg);border:1px solid rgba(98,80,214,.25);border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:1.5;color:var(--ink2);display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;gap:14px}
+.aibox h3{margin:0 0 3px;font-size:13px;color:var(--ink)}
+.ai .lname b{color:var(--ai)}
+.rhythm{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px}
+.rbox{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;color:var(--ink2)}
+.rbox h3{margin:0 0 4px;font-size:13px;color:var(--ink)}
+.tag{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:999px;margin-right:4px;font-weight:600}
+.tl{background:var(--liveBg);color:#184f95}.tk{background:var(--konBg);color:#9a3a12}.ta{background:var(--aiBg);color:#3d2fa0}
+.sec{font-size:11.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+</style></head><body><div class="wrap">
+<h1>Peta Sistem Monitoring &amp; Analisis · Collector Parfum</h1>
+<p class="sub">Dua jalur terpisah (Live &amp; Konten) yang bertemu di analisis Claude · semua data di Google Drive · reminder lewat WhatsApp</p>
+
+<div class="heads"><div></div><div>Siapa &amp; input</div><div></div><div>Disimpan di</div><div></div><div>Diproses robot (Apps Script + bot di VPS)</div><div></div><div>Hasil yang keluar</div></div>
+
+<div class="lane live">
+ <div class="lname"><b>JALUR LIVE</b><span>Host: Brando, Vanna, Linda</span></div>
+ <div class="box"><h3>Host live</h3><ul><li>Kirim screenshot TikTok + Shopee ke grup CP Live tiap pergantian, caption = nama</li><li>Live mati → screenshot layar akhir dulu (caption "nama mati")</li><li>Balas hanya kalau angka salah</li></ul><h3 style="margin-top:6px">Referensi</h3><ul><li>Penjadwalan Host Live CP → tab Data Jadwal (hanya dibaca)</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>📊 CP – Live Tracker</h3><ul><li>Pengaturan: target, pola sesi, deadline</li><li>Sesi Live: 1 baris per laporan, dipisah per siaran (tahan reset)</li><li>Koreksi &amp; Atribusi: menunggu persetujuan kamu</li><li>Rekap Host: capaian vs target &amp; bulan lalu</li><li>Rapor Host</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>🤖 Robot</h3><ul><li>Baca angka di screenshot (Claude API) → hitung selisih per sesi, deteksi live mati/reset</li><li>Hitung pace target, kebutuhan per hari, omzet/jam, indeks slot</li><li>Jadwalkan &amp; kirim reminder</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>📱 WA</h3><ul><li>Grup: update target pagi, konfirmasi tiap laporan, rekap harian</li><li>Kamu (pribadi): teguran, laporan bolong, koreksi untuk disetujui</li></ul></div>
+</div>
+
+<div class="lane kon">
+ <div class="lname"><b>JALUR KONTEN</b><span>Content planner + editor</span></div>
+ <div class="box"><h3>Content planner</h3><ul><li>Bank Ide, Papan Konten (status + link tayang)</li><li>Script di Docs mingguan</li><li>Senin: unggah export TikTok/IG + isi Form laporan</li></ul><h3 style="margin-top:6px">Editor</h3><ul><li>Status "Diedit" + link file</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>📊 CP – Content Tracker</h3><ul><li>Bank Ide · Papan Konten · Kalender</li><li>Raw TikTok / Raw IG → Data Konten</li><li>Laporan Planner · Rapor Konten</li></ul><h3 style="margin-top:6px">📄 Docs</h3><ul><li>Script Minggu NN</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>🤖 Robot</h3><ul><li>Cek deadline framework harian</li><li>Impor export sosmed, seragamkan kolom, cocokkan via link</li><li>Isi kalender otomatis dari Papan</li></ul></div>
+ <div class="arrow">→</div>
+ <div class="box"><h3>📱 WA</h3><ul><li>Planner/editor: tagih deadline &amp; konten yang belum tayang</li><li>Kamu: "14+14 script siap disetujui"</li></ul></div>
+</div>
+
+<div class="ai">
+ <div class="lname"><b>CLAUDE</b><span>Analis terjadwal, membaca kedua jalur</span></div>
+ <div class="aibox">
+  <div><h3>🧠 Kamis malam</h3>Review script: hook, kesesuaian pilar, dibandingkan dengan pola konten terbaik → komentar di Docs</div>
+  <div><h3>📄 Senin sore</h3>Analisis Mingguan: A. final (2 minggu lalu) · B. sinyal awal · cek temuan planner · kaitan konten ↔ live</div>
+  <div><h3>📄 Tanggal 5</h3>Evaluasi Bulanan + rapor host &amp; konten + usulan target bulan depan</div>
+  <div><h3>💬 Kapan saja</h3>Kamu tanya di chat; laporan dikirim lewat Outbox → robot → WA</div>
+ </div>
+</div>
+
+<div class="sec">Ritme otomatis</div>
+<div class="rhythm">
+ <div class="rbox"><h3>Harian</h3><span class="tag tl">Live</span>08:00 update target di grup · konfirmasi tiap laporan · deteksi live mati · 22:30 rekap harian di grup + ringkasan pribadi ke kamu<br><span class="tag tk">Konten</span>deadline framework hari itu · 21:00 cek 2 video + 2 feed sudah tayang</div>
+ <div class="rbox"><h3>Mingguan</h3><span class="tag tk">Konten</span>Sen 12:00 Form + tarikan · Sel 17:00 bank ide · Rab 17:00 ≥7+7 script · Kam 17:00 14+14 script · Jum/Sab 18:00 shooting · editor: batas edit<br><span class="tag ta">Claude</span>Kam review script · Sen Analisis Mingguan</div>
+ <div class="rbox"><h3>Bulanan</h3><span class="tag ta">Claude</span>Evaluasi Bulanan tanggal 5 (bulan sebelumnya): sales, konten, sintesis, rapor per staff, target &amp; keputusan bulan depan<br><span class="tag tl">Live</span>peringatan bertingkat: tertinggal pace → tegas · 3 hari berturut → kamu dikabari</div>
+</div>
+</div></body></html>

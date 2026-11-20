@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><title>Format Spreadsheet CP</title>
+<style>
+:root{--page:#f1f1ee;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--auto:#f4f4f1;--hdr:#e9e8e3;
+--ok:#0a7d3b;--okbg:#e5f4ea;--warn:#8a5a00;--warnbg:#fdf2d8;--bad:#b42323;--badbg:#fbe4e4;--blue:#2a78d6;--blueBg:#eaf2fc;--kon:#eb6834}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+.file{width:1280px;padding:22px 24px 18px;background:var(--page)}
+.fhead{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
+.fhead h1{font-size:19px;margin:0;font-weight:650}
+.perm{font-size:11.5px;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid var(--grid);color:var(--ink2)}
+.fsub{font-size:12.5px;color:var(--ink2);margin:0 0 10px}
+.sheet{background:#fff;border:1px solid #d6d5cf;border-radius:8px;overflow:hidden;margin-bottom:12px}
+.tabname{display:flex;justify-content:space-between;align-items:center;background:#fafaf8;border-bottom:1px solid var(--grid);padding:7px 12px;font-size:12.5px;font-weight:650}
+.tabname span{font-weight:400;color:var(--ink2);font-size:11.5px}
+table{border-collapse:collapse;width:100%;font-size:11.5px}
+th,td{border:1px solid var(--grid);padding:5px 7px;text-align:left;white-space:nowrap}
+th{background:var(--hdr);font-weight:650;font-size:11px;color:#2c2c2a}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+td.auto{background:var(--auto)}
+td.in{background:#fff}
+th.in{background:#dbe8f9}
+.ok{background:var(--okbg)!important;color:var(--ok);font-weight:600}
+.warn{background:var(--warnbg)!important;color:var(--warn);font-weight:600}
+.bad{background:var(--badbg)!important;color:var(--bad);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid var(--grid)}
+.kpi{padding:10px 12px;border-right:1px solid var(--grid)}
+.kpi:last-child{border-right:0}
+.kpi .l{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.kpi .v{font-size:20px;font-weight:650;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:11.5px;color:var(--ink2)}
+.bar{height:6px;background:#eceae4;border-radius:3px;position:relative;margin-top:6px;width:120px;display:inline-block;vertical-align:middle}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--blue)}
+.bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#0b0b0b}
+.tabs{display:flex;gap:2px;background:#e9e8e3;padding:4px 8px 0;border-top:1px solid #d6d5cf}
+.tabs div{font-size:11.5px;padding:5px 12px;border-radius:6px 6px 0 0;color:var(--ink2);background:#f4f4f1}
+.tabs div.a{background:#fff;color:var(--ink);font-weight:650}
+.tabs div .lk{font-size:10px;margin-left:4px}
+.legend{display:flex;gap:16px;font-size:11.5px;color:var(--ink2);margin:0 0 10px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:12px;border:1px solid var(--grid);vertical-align:-2px;margin-right:5px;border-radius:2px}
+.two{display:grid;grid-template-columns:1.25fr 1fr;gap:12px}
+.note{font-size:11.5px;color:var(--ink2);padding:7px 12px;border-top:1px solid var(--grid);background:#fafaf8}
+.chip{display:inline-block;padding:1px 6px;border-radius:999px;font-size:10.5px;font-weight:600}
+</style><style>
+.box2{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+.fn{padding:10px 12px;border-right:1px solid var(--grid);font-size:12px}
+.fn:last-child{border-right:0}
+.fn .t{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.fn .v{font-size:17px;font-weight:650;margin:2px 0}
+.dict{columns:2;column-gap:28px;font-size:11.5px;color:var(--ink2);padding:10px 14px;line-height:1.55}
+.dict b{color:var(--ink)}
+.hm td{text-align:center;width:9%}
+</style></head><body>
+<div class="file" id="ankonten">
+ <div class="fhead"><h1>📊 CP – Content Tracker</h1><span class="perm">Tab baru: Analisis Konten · 👁 lihat saja · dihitung otomatis dari Raw TikTok &amp; Raw IG</span></div>
+ <p class="fsub">Angka di bawah dihitung dari <b>file export asli yang kamu kirim</b> (TikTok 1–15 Okt, IG 1–15 Nov) · jam sudah dikonversi ke WIB (asumsi export = UTC)</p>
+ <div class="sheet">
+  <div class="tabname">A. Ringkasan per platform &amp; format <span>periode dipilih di sel filter · hanya konten berstatus final dipakai untuk perbandingan</span></div>
+  <table>
+   <tr><th>Platform · format</th><th>Jumlah</th><th>Rata-rata views</th><th>Median views</th><th>Engagement rate</th><th>Save rate</th><th>Share rate</th><th>Follow rate</th><th>Views ÷ reach</th></tr>
+   <tr><td><b>TikTok · video</b></td><td class="auto n">26</td><td class="auto n">1.508</td><td class="auto n">1.488</td><td class="auto n">0,96% <span style="color:var(--muted)">(÷ views)</span></td><td class="auto n">0,22%</td><td class="auto n">0,07%</td><td class="auto n">– tidak ada di export</td><td class="auto n">–</td></tr>
+   <tr><td><b>IG · reels</b></td><td class="auto n">13</td><td class="auto n">716</td><td class="auto n">736</td><td class="auto n">1,03% <span style="color:var(--muted)">(÷ reach)</span></td><td class="auto n">0,25%</td><td class="auto n">0,10%</td><td class="auto n">0,015%</td><td class="auto n">1,43×</td></tr>
+   <tr><td><b>IG · feed (gambar)</b></td><td class="auto n">33</td><td class="auto n">481</td><td class="auto n">441</td><td class="n warn">0,52% <span style="color:var(--muted)">(÷ reach)</span></td><td class="auto n">0,14%</td><td class="n warn">0,03%</td><td class="auto n">0,024%</td><td class="auto n">1,94×</td></tr>
+  </table>
+ </div>
+ <div class="two">
+  <div class="sheet">
+   <div class="tabname">B. Per label konten (pilar / format / hook) <span>dari label di Papan Konten</span></div>
+   <table>
+    <tr><th>Label (TikTok)</th><th>Jumlah</th><th>Rata² views</th><th>Indeks*</th><th>ER</th><th>Save rate</th></tr>
+    <tr><td><b>Rekomendasi / perbandingan</b></td><td class="auto n">3</td><td class="auto n">2.347</td><td class="n ok">1,58×</td><td class="n ok">1,52%</td><td class="n ok">0,45%</td></tr>
+    <tr><td><b>Skit humor / relatable</b></td><td class="auto n">21</td><td class="auto n">1.373</td><td class="n warn">0,92×</td><td class="auto n">0,81%</td><td class="auto n">0,15%</td></tr>
+   </table>
+   <div class="note">* Indeks = views konten ÷ median views format yang sama. 1,0× = biasa · &gt;1 = di atas biasa. Sampel rekomendasi baru 3 → ditandai "sampel kecil".</div>
+  </div>
+  <div class="sheet">
+   <div class="tabname">C. Jam posting (WIB) <span>rata-rata views per jam tayang</span></div>
+   <table>
+    <tr><th>Platform</th><th>Jam</th><th>Jumlah</th><th>Rata² views</th><th>Indeks</th></tr>
+    <tr><td>TikTok</td><td class="auto">12:00</td><td class="auto n">13</td><td class="auto n">1.650</td><td class="n ok">1,11×</td></tr>
+    <tr><td>TikTok</td><td class="auto">18:00</td><td class="auto n">11</td><td class="auto n">1.361</td><td class="auto n">0,91×</td></tr>
+    <tr><td>IG reels</td><td class="auto">06:00</td><td class="auto n">11</td><td class="auto n">698</td><td class="auto n">0,95×</td></tr>
+    <tr><td>IG feed</td><td class="auto">07:00 · 08:00</td><td class="auto n">13 · 15</td><td class="auto n">442 · 518</td><td class="auto n">1,00× · 1,17×</td></tr>
+   </table>
+  </div>
+ </div>
+ <div class="sheet">
+  <div class="tabname">D. Per konten <span>diurutkan dari indeks tertinggi · hanya konten final yang diberi peringkat</span></div>
+  <table>
+   <tr><th>Kode</th><th>Platform</th><th>Tayang (WIB)</th><th>Umur data</th><th>Status</th><th>Label</th><th>Views</th><th>Reach</th><th>ER</th><th>Save rate</th><th>Indeks</th><th>Momentum**</th></tr>
+   <tr><td class="auto">CP-V-4103</td><td class="auto">TikTok</td><td class="auto">11/10 12:00</td><td class="auto n">11 hari</td><td class="ok">final</td><td class="auto">Perbandingan · gym</td><td class="auto n">3.422</td><td class="auto n">–</td><td class="auto n">1,46%</td><td class="n ok">0,50%</td><td class="n ok">2,30×</td><td class="auto n">+18%</td></tr>
+   <tr><td class="auto">CP-V-4007</td><td class="auto">TikTok</td><td class="auto">07/10 18:00</td><td class="auto n">15 hari</td><td class="ok">final</td><td class="auto">Rekomendasi · dating</td><td class="auto n">2.116</td><td class="auto n">–</td><td class="n ok">1,94%</td><td class="n ok">0,52%</td><td class="n ok">1,42×</td><td class="auto n">+6%</td></tr>
+   <tr><td class="auto">CP-V-4501</td><td class="auto">IG reels</td><td class="auto">02/11 06:00</td><td class="auto n">13 hari</td><td class="ok">final</td><td class="auto">Rekomendasi · cewek</td><td class="auto n">1.016</td><td class="auto n">696</td><td class="n ok">2,01%</td><td class="auto n">0,39%</td><td class="n ok">1,38×</td><td class="auto n">+4%</td></tr>
+   <tr><td class="auto">CP-V-4106</td><td class="auto">TikTok</td><td class="auto">15/10 18:51</td><td class="auto n">7 hari</td><td class="ok">final</td><td class="auto">Skit · baper</td><td class="auto n">693</td><td class="auto n">–</td><td class="auto n">1,01%</td><td class="auto n">0,14%</td><td class="n bad">0,47×</td><td class="auto n">+2%</td></tr>
+   <tr><td class="auto">CP-F-4614</td><td class="auto">IG feed</td><td class="auto">15/11 08:00</td><td class="auto n">1 hari</td><td class="warn">awal ⏳</td><td class="auto">Produk · unisex</td><td class="auto n">468</td><td class="auto n">216</td><td class="auto n">0,93%</td><td class="auto n">0,21%</td><td class="auto n">belum dinilai</td><td class="auto n"></td></tr>
+  </table>
+  <div class="note">** Momentum = pertumbuhan views dari tarikan pertama ke tarikan kedua (konten yang masih naik setelah minggu pertama). Angka momentum di baris contoh ini ilustrasi — butuh 2 tarikan.</div>
+ </div>
+ <div class="sheet">
+  <div class="tabname">Kamus metrik <span>tertulis di tab supaya semua staff memakai definisi yang sama</span></div>
+  <div class="dict">
+   <div><b>Engagement rate (ER) IG</b> = (like + komen + share + save) ÷ reach</div>
+   <div><b>Engagement rate (ER) TikTok</b> = (like + komen + share + favorit) ÷ views — TikTok tidak memberi reach, jadi ER TikTok dan IG <u>tidak dibandingkan langsung</u></div>
+   <div><b>Save rate</b> = save ÷ views — sinyal niat beli</div>
+   <div><b>Share rate</b> = share ÷ views — sinyal konten disebar</div>
+   <div><b>Follow rate</b> (IG) = follow ÷ reach</div>
+   <div><b>Views ÷ reach</b> = rata-rata satu orang menonton berapa kali</div>
+   <div><b>Indeks</b> = views ÷ median views format yang sama di periode itu</div>
+   <div><b>Status final</b> = umur data ≥ 7 hari · <b>awal</b> = &lt; 7 hari (tidak diberi peringkat)</div>
+  </div>
+ </div>
+ <div class="tabs"><div>Output Mingguan</div><div>Papan Konten</div><div class="a">Analisis Konten</div><div>Kalender</div><div>Bank Ide</div><div>Data Konten</div><div>Laporan Planner</div><div>Pengaturan</div><div>Raw TikTok<span class="lk">🔒</span></div><div>Raw IG<span class="lk">🔒</span></div></div>
+</div>
+
+<div class="file" id="anlive">
+ <div class="fhead"><h1>📊 CP – Live Tracker</h1><span class="perm">Tab baru: Analisis Live · 👁 lihat saja · dihitung otomatis dari Sesi Live</span></div>
+ <p class="fsub">Bagian A memakai <b>angka asli dari screenshot yang kamu kirim</b> (live Selasa 17 Nov) · bagian B &amp; C data contoh</p>
+ <div class="sheet">
+  <div class="tabname">A. Corong penjualan per platform <span>per hari / per host / per periode (pilih di filter)</span></div>
+  <div class="box2">
+   <div class="fn"><div class="t">Shopee · masuk → keranjang</div><div class="v">952 → 62</div>Add-to-cart rate <b>6,5%</b></div>
+   <div class="fn"><div class="t">Shopee · keranjang → pesanan</div><div class="v">62 → 13</div>Cart-to-order <b>21,0%</b> · konversi total <b>1,37%</b></div>
+   <div class="fn"><div class="t">Shopee · nilai</div><div class="v">Rp1.317.034</div>AOV <b>Rp101.310</b> · omzet/jam <b>Rp119.700</b> (11 j)</div>
+   <div class="fn"><div class="t">Shopee · keterlibatan</div><div class="v">215 komentar</div>komentar ÷ dilihat <b>22,6%</b> · rata² nonton <b>38 detik</b></div>
+  </div>
+  <div class="box2" style="border-top:1px solid var(--grid)">
+   <div class="fn"><div class="t">TikTok · impresi → masuk live</div><div class="v">23,7K → 770</div>Tap-in rate <b>3,2%</b></div>
+   <div class="fn"><div class="t">TikTok · masuk → terjual</div><div class="v">770 → 7</div>Konversi <b>0,91%</b></div>
+   <div class="fn"><div class="t">TikTok · nilai</div><div class="v">Rp578 rb*</div>Nilai per produk <b>Rp82.600</b> · *dibulatkan</div>
+   <div class="fn"><div class="t">TikTok · keterlibatan</div><div class="v">213 komentar</div>komentar ÷ tayangan <b>27,7%</b> · pengikut baru <b>5</b></div>
+  </div>
+ </div>
+ <div class="two">
+  <div class="sheet">
+   <div class="tabname">B. Per host (bulan berjalan) <span>data contoh</span></div>
+   <table>
+    <tr><th>Host</th><th>Omzet/jam</th><th>AOV</th><th>Konversi</th><th>Add-to-cart</th><th>Komentar/jam</th><th>Indeks slot*</th></tr>
+    <tr><td><b>Brando</b></td><td class="auto n">Rp137 rb</td><td class="auto n">Rp96 rb</td><td class="n warn">1,2%</td><td class="auto n">5,8%</td><td class="auto n">31</td><td class="n warn">0,88×</td></tr>
+    <tr><td><b>Vanna</b></td><td class="auto n">Rp172 rb</td><td class="auto n">Rp104 rb</td><td class="n ok">1,6%</td><td class="auto n">7,1%</td><td class="auto n">44</td><td class="n ok">1,12×</td></tr>
+    <tr><td><b>Linda</b></td><td class="auto n">Rp154 rb</td><td class="auto n">Rp99 rb</td><td class="auto n">1,4%</td><td class="auto n">6,4%</td><td class="auto n">38</td><td class="auto n">1,01×</td></tr>
+   </table>
+   <div class="note">* Indeks slot = omzet/jam host ÷ rata-rata semua host di jam yang sama — adil untuk host yang dapat jam sepi. Aktif setelah ≥ 3–4 minggu data.</div>
+  </div>
+  <div class="sheet">
+   <div class="tabname">C. Peta jam ramai — omzet/jam (Rp rb) <span>data contoh</span></div>
+   <table class="hm">
+    <tr><th>Hari</th><th>09</th><th>11</th><th>13</th><th>15</th><th>17</th><th>19</th><th>21</th></tr>
+    <tr><td><b>Sen–Kam</b></td><td style="background:#eaf2fc">88</td><td style="background:#d4e5fa">112</td><td style="background:#b7d3f6">140</td><td style="background:#d4e5fa">118</td><td style="background:#b7d3f6">146</td><td style="background:#86b6ef">198</td><td style="background:#9ec5f4">171</td></tr>
+    <tr><td><b>Jum–Min</b></td><td style="background:#d4e5fa">104</td><td style="background:#b7d3f6">139</td><td style="background:#9ec5f4">165</td><td style="background:#b7d3f6">151</td><td style="background:#9ec5f4">172</td><td style="background:#6da7ec;color:#fff">231</td><td style="background:#86b6ef">204</td></tr>
+   </table>
+   <div class="note">Menjawab otomatis pertanyaan "jam berapa paling ramai" → dasar pemilihan Varian A/B nanti.</div>
+  </div>
+ </div>
+ <div class="sheet">
+  <div class="tabname">Kamus metrik live</div>
+  <div class="dict">
+   <div><b>Konversi</b> = pesanan (Shopee) atau produk terjual (TikTok) ÷ penonton yang masuk (dilihat/tayangan)</div>
+   <div><b>Add-to-cart rate</b> (Shopee) = masuk keranjang ÷ dilihat</div>
+   <div><b>Cart-to-order</b> (Shopee) = pesanan ÷ masuk keranjang</div>
+   <div><b>AOV</b> = omzet ÷ pesanan (rata-rata nilai belanja)</div>
+   <div><b>Tap-in rate</b> (TikTok) = tayangan ÷ impresi</div>
+   <div><b>Omzet/jam</b> = omzet ÷ jam on-air</div>
+  </div>
+ </div>
+ <div class="tabs"><div>Dashboard Host</div><div>Harian per Host</div><div class="a">Analisis Live</div><div>Sesi Live</div><div>Koreksi &amp; Atribusi</div><div>Pengaturan</div><div>Log Bot<span class="lk">🔒</span></div></div>
+</div>
+</body></html>
