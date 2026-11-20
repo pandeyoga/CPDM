@@ -164,15 +164,14 @@ const STATUS_TIDAK_VALID = `IF($B$2="Custom","Tanggal tidak valid","Pilih period
 function blokFilter(status: string): Record<string, string> {
   const sebelumnya = `$H$2="${PEMBANDING.sebelumnya}"`;
   const bulanLalu = `$H$2="${PEMBANDING.bulan_lalu}"`;
-  // Bulan lalu tanggal sama: tanggal 1 bulan sebelum bulan `sampai` s/d min(hari sampai, akhir bulan itu).
-  const akhirBulanLalu = `EOMONTH(${SAMPAI},-1)`;
-  const akhirDuaBulan = `EOMONTH(${SAMPAI},-2)`;
+  // Bulan lalu tanggal sama (R25): tanggal x sebulan sebelumnya, hari dijepit ke panjang bulan itu.
+  const bulanSebelumnya = (x: string): string =>
+    `EOMONTH(${x},-2)+MIN(${x}-EOMONTH(${x},-1),EOMONTH(${x},-1)-EOMONTH(${x},-2))`;
   return {
     J2: `=${pilihPreset(PRESET_DARI, `IF(AND($B$2="Custom",$D$2<>"",$F$2<>"",$D$2<=$F$2),$D$2,"")`)}`,
     K2: `=IF(${DARI}="","",${pilihPreset(PRESET_SAMPAI, "$F$2")})`,
-    J3: `=IF(${DARI}="","",IF(${sebelumnya},2*${DARI}-${SAMPAI}-1,IF(${bulanLalu},${akhirDuaBulan}+1,"")))`,
-    K3: `=IF(${DARI}="","",IF(${sebelumnya},${DARI}-1,IF(${bulanLalu},` +
-      `${akhirDuaBulan}+MIN(${SAMPAI}-${akhirBulanLalu},${akhirBulanLalu}-${akhirDuaBulan}),"")))`,
+    J3: `=IF(${DARI}="","",IF(${sebelumnya},2*${DARI}-${SAMPAI}-1,IF(${bulanLalu},${bulanSebelumnya(DARI)},"")))`,
+    K3: `=IF(${DARI}="","",IF(${sebelumnya},${DARI}-1,IF(${bulanLalu},${bulanSebelumnya(SAMPAI)},"")))`,
     B3: `=${status}`,
     D3: `=${DARI}`, F3: `=${SAMPAI}`, H3: `=${PB_DARI}`, I3: `=${PB_SAMPAI}`,
   };

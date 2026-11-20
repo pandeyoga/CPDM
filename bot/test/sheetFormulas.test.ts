@@ -316,10 +316,29 @@ describe("rentang efektif dan pembanding di J2:K3 = periodRange / comparisonRang
     }
   });
 
+  it("R25: Bulan lalu tanggal sama menggeser kedua ujung satu bulan (hari dijepit)", () => {
+    const kasus: Array<[string, Preset, { dari: string; sampai: string } | undefined, string, string]> = [
+      ["2026-11-20", "Hari ini", undefined, "2026-10-20", "2026-10-20"],
+      ["2026-11-20", "Bulan ini", undefined, "2026-10-01", "2026-10-20"],
+      ["2026-11-20", "Custom", { dari: "2026-11-05", sampai: "2026-11-15" }, "2026-10-05", "2026-10-15"],
+      ["2026-11-20", "Bulan lalu", undefined, "2026-09-01", "2026-09-30"],
+      ["2026-11-20", "Custom", { dari: "2026-03-31", sampai: "2026-03-31" }, "2026-02-28", "2026-02-28"],
+    ];
+    for (const [today, preset, custom, dari, sampai] of kasus) {
+      buku.hariIni(today);
+      buku.filter("Dashboard Host", preset, { ...custom, pembanding: PEMBANDING.bulan_lalu });
+      const label = `${preset} ${custom?.dari ?? ""}`;
+      expect(comparisonRange(periodRange(preset, today, custom), "bulan_lalu"), label).toEqual({ dari, sampai });
+      expect([sel("J3"), sel("K3"), sel("H3"), sel("I3")], label)
+        .toEqual([serialTanggal(dari), serialTanggal(sampai), serialTanggal(dari), serialTanggal(sampai)]);
+    }
+  });
+
   it("Custom: dikembalikan apa adanya; Dari > Sampai atau kosong → tidak valid", () => {
     buku.hariIni("2026-11-20");
     const pasangan: Array<[string, string]> = [
       ["2026-11-01", "2026-11-15"], ["2026-11-15", "2026-11-15"], ["2026-01-31", "2026-03-30"], ["2028-02-10", "2028-03-31"],
+      ["2026-11-05", "2026-11-15"], ["2026-03-31", "2026-03-31"], ["2028-03-29", "2028-03-31"], ["2026-12-31", "2027-01-30"],
     ];
     for (const [dari, sampai] of pasangan) {
       for (const mode of MODE) {

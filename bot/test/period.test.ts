@@ -61,12 +61,17 @@ describe("comparisonRange", () => {
     expect(comparisonRange(r("2026-03-01", "2026-03-31"), "sebelumnya")).toEqual(r("2026-01-29", "2026-02-28"));
   });
 
-  it("bulan lalu tanggal sama: tanggal 1 s/d min(hari sampai, akhir bulan lalu)", () => {
-    expect(comparisonRange(r("2026-10-01", "2026-10-31"), "bulan_lalu")).toEqual(r("2026-09-01", "2026-09-30"));
+  it("bulan lalu tanggal sama (R25): kedua ujung mundur satu bulan, hari dijepit ke panjang bulan itu", () => {
+    expect(comparisonRange(periodRange("Hari ini", T), "bulan_lalu")).toEqual(r("2026-10-20", "2026-10-20"));
+    expect(comparisonRange(periodRange("Bulan ini", T), "bulan_lalu")).toEqual(r("2026-10-01", "2026-10-20"));
+    expect(comparisonRange(r("2026-11-05", "2026-11-15"), "bulan_lalu")).toEqual(r("2026-10-05", "2026-10-15"));
+    expect(comparisonRange(periodRange("Bulan lalu", T), "bulan_lalu")).toEqual(r("2026-09-01", "2026-09-30"));
+    expect(comparisonRange(r("2026-03-31", "2026-03-31"), "bulan_lalu")).toEqual(r("2026-02-28", "2026-02-28"));
+    expect(comparisonRange(r("2026-11-14", "2026-11-20"), "bulan_lalu")).toEqual(r("2026-10-14", "2026-10-20"));
     expect(comparisonRange(r("2026-03-01", "2026-03-30"), "bulan_lalu")).toEqual(r("2026-02-01", "2026-02-28"));
-    expect(comparisonRange(r("2028-03-01", "2028-03-31"), "bulan_lalu")).toEqual(r("2028-02-01", "2028-02-29"));
-    expect(comparisonRange(r("2027-01-01", "2027-01-15"), "bulan_lalu")).toEqual(r("2026-12-01", "2026-12-15"));
-    expect(comparisonRange(r("2026-11-14", "2026-11-20"), "bulan_lalu")).toEqual(r("2026-10-01", "2026-10-20"));
+    expect(comparisonRange(r("2028-03-29", "2028-03-31"), "bulan_lalu")).toEqual(r("2028-02-29", "2028-02-29"));
+    expect(comparisonRange(r("2027-01-10", "2027-01-15"), "bulan_lalu")).toEqual(r("2026-12-10", "2026-12-15"));
+    expect(comparisonRange(r("2026-10-22", "2026-11-20"), "bulan_lalu")).toEqual(r("2026-09-22", "2026-10-20"));
   });
 
   it("tanpa pembanding dan rentang tidak valid → null", () => {

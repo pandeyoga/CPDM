@@ -19,6 +19,11 @@ export interface Rentang { dari: string; sampai: string }
 // 1 = Senin … 7 = Minggu (minggu dimulai Senin).
 const hariKe = (date: string): number => new Date(`${date}T00:00:00.000Z`).getUTCDay() || 7;
 const awalBulan = (date: string): string => `${date.slice(0, 7)}-01`;
+// Tanggal yang sama sebulan sebelumnya; hari dijepit ke panjang bulan itu (31 Mar → 28 Feb).
+function bulanSebelumnya(date: string): string {
+  const hari = daysInMonth(addDays(awalBulan(date), -1).slice(0, 7));
+  return hari[Math.min(Number(date.slice(8, 10)), hari.length) - 1]!;
+}
 const selisihHari = (a: string, b: string): number =>
   (Date.parse(`${b}T00:00:00.000Z`) - Date.parse(`${a}T00:00:00.000Z`)) / 86_400_000;
 
@@ -46,7 +51,7 @@ export function periodRange(preset: Preset, today: string, custom?: Rentang): Re
 /**
  * Rentang pembanding; null untuk "tanpa" atau rentang tidak valid (dari > sampai).
  * - sebelumnya: jumlah hari sama, berakhir sehari sebelum `dari`.
- * - bulan_lalu: tanggal 1 bulan sebelum bulan `sampai` s/d min(hari `sampai`, akhir bulan itu).
+ * - bulan_lalu (R25): kedua ujung mundur satu bulan kalender, hari dijepit ke panjang bulan itu.
  */
 export function comparisonRange(range: Rentang, mode: ModePembanding): Rentang | null {
   if (mode === "tanpa" || range.dari > range.sampai) return null;
@@ -54,6 +59,5 @@ export function comparisonRange(range: Rentang, mode: ModePembanding): Rentang |
     const n = selisihHari(range.dari, range.sampai) + 1;
     return { dari: addDays(range.dari, -n), sampai: addDays(range.dari, -1) };
   }
-  const hari = daysInMonth(addDays(awalBulan(range.sampai), -1).slice(0, 7));
-  return { dari: hari[0]!, sampai: hari[Math.min(Number(range.sampai.slice(8, 10)), hari.length) - 1]! };
+  return { dari: bulanSebelumnya(range.dari), sampai: bulanSebelumnya(range.sampai) };
 }
