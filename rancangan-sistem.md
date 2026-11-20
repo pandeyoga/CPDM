@@ -459,6 +459,35 @@ Kedua tab ini **hanya bisa dilihat** dan dihitung otomatis. Masing-masing memuat
 
 **C. Peta jam ramai.** Omzet per jam disusun menurut jam dalam sehari dan kelompok hari. Peta ini jadi dasar keputusan Varian A atau B nanti.
 
+## 8a-2. Filter periode dan data historis
+
+**Semua tab dashboard dan analisis punya baris filter di bagian atas:**
+
+```
+Periode: [ Bulan ini ▾ ]   Dari: [ 01/11/2026 ]  Sampai: [ 20/11/2026 ]   Bandingkan: [ Periode sebelumnya ▾ ]
+```
+
+- **Pilihan periode:** Hari ini · Kemarin · 7 hari terakhir · 30 hari terakhir · Minggu ini · Minggu lalu · Bulan ini · Bulan lalu · **Custom**.
+- **Tanggal Dari dan Sampai** dipakai kalau periode diset Custom. Kolomnya memakai pemilih tanggal.
+- **Pilihan pembanding:** Periode sebelumnya (panjang sama, tepat sebelum periode yang dipilih) · Bulan lalu di tanggal yang sama · Tanpa pembanding.
+- **Begitu filter diubah, semua angka langsung berubah**: realisasi, target, persentase, selisih, omzet per jam, konversi, corong, peta jam, dan indeks slot.
+- **Target periode** = jumlah target harian di rentang itu, setelah dikurangi gugur. Kalau rentangnya mencakup hari ini, kolom "seharusnya" hanya dihitung sampai hari ini.
+- **Status dan streak "kondisi saat ini"** (tertinggal 3 hari dan sejenisnya) tidak ikut filter. Bagian ini selalu menunjukkan keadaan hari ini.
+
+**Cara kerjanya:**
+1. Bot menulis **tabel data rinci yang tidak pernah dihapus**:
+   - **Data Kredit:** satu baris per kredit host per platform. Isinya tanggal, jam, host, omzet, pesanan, penonton, menit on-air, omzet harapan untuk indeks slot, dan status.
+   - **Target Harian:** satu baris per tanggal per host. Isinya target, gugur, dan sebabnya.
+2. Tab dashboard menghitung dari kedua tabel itu memakai **rumus spreadsheet**. Itu sebabnya angka langsung berubah tanpa menunggu bot.
+
+**Data disimpan permanen**, tanpa reset bulanan. Target bulanan diisi di tab Pengaturan sebagai tabel dengan kolom Bulan dan Target. Ada juga tab **Tren Bulanan** yang menampilkan per bulan dan per host: realisasi, target, persentase, omzet per jam, dan konversi untuk semua bulan yang tercatat.
+
+**Pengaman:** setiap malam bot menghitung sendiri angka "bulan ini", lalu mencocokkannya dengan hasil rumus di tab tersembunyi **Kontrol**. Kalau berbeda lebih dari Rp1, owner menerima pesan pribadi dan kejadiannya tercatat di Log Bot.
+
+**Pesan WA** (update pagi dan rekap) tetap memakai periode bulan berjalan.
+
+**Tab yang hanya bisa dilihat, yaitu file Management:** orang yang hanya punya akses lihat tidak bisa mengubah sel filter di Google Sheets. Cara menyediakan filter untuk management masih menunggu keputusan owner (lihat bagian 14).
+
 ## 8b. Hak akses
 
 | File | Owner | Host | Planner / Editor | Management | Bot |
@@ -535,6 +564,11 @@ File **hanya-lihat** yang diperbarui otomatis. Isinya:
 ## 14. Pertanyaan terbuka
 
 Tidak ada yang menghalangi Tahap 1.
+
+- **Filter tanggal untuk management** (file yang hanya bisa dilihat). Perlu dijawab sebelum Tahap 4. Pilihannya:
+  - Laporan Looker Studio dengan kontrol rentang tanggal.
+  - Management diberi akses edit khusus sel filter.
+  - Management hanya melihat periode tetap.
 
 - **Management: hanya internal, atau client juga?** *Asumsi sementara: hanya internal.* Kalau client ikut melihat, rapor dan data kedisiplinan staff tidak ditampilkan di file yang bisa dilihat client. Perlu dijawab sebelum Tahap 4.
 - **Apakah pencapaian target terkait bonus?** Kalau iya, perlu jejak audit yang lebih ketat dan penguncian data per bulan.

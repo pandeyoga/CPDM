@@ -7,7 +7,7 @@
 **Architecture:**
 - **Satu layanan Node.js/TypeScript (`bot/`) di VPS**, berjalan berdampingan dengan WAHA dalam docker-compose.
 - **SQLite di VPS adalah sumber data utama.** Di sana tersimpan semua laporan, antrean, dan penanda pesan yang sudah diproses.
-- **Google Sheets adalah antarmuka.** Owner mengisi input di sana, dan dashboard ditulis ulang oleh bot.
+- **Google Sheets adalah antarmuka.** Owner mengisi input di sana. Bot menulis tabel data rinci (Data Kredit dan Target Harian), lalu tab dashboard menghitung dari tabel itu memakai rumus yang dikendalikan sel filter periode. Karena itu filter tanggal langsung berlaku.
 - **Logika bisnis ditulis sebagai fungsi murni di `src/domain/`**, yang bisa dites tanpa jaringan. Semua akses ke WAHA, Claude, dan Google ada di `src/infra/` di balik interface.
 - **Pemeriksa detak** adalah Apps Script kecil di spreadsheet.
 
@@ -19,6 +19,7 @@
 - googleapis (Sheets + Drive, OAuth refresh token milik owner)
 - `@anthropic-ai/sdk` + zod (`zodOutputFormat`)
 - WAHA Core (Docker)
+- HyperFormula, hanya sebagai devDependency untuk menguji rumus spreadsheet
 
 **Spec:** `/home/user/cp-sistem/rancangan-sistem.md`. Yang relevan untuk tahap ini: bagian 3, 5, 6 (termasuk 6.1a, 6.1b, 6.7), 8a bagian Analisis Live, 8b, 12, dan 15. Format tab mengikuti `format-live.png` dan `format-anlive.png`.
 
@@ -44,6 +45,12 @@
 - **Model Claude:** `claude-opus-5-5`, `output_config.effort: "medium"`. Dipanggil lewat `client.beta.messages.create` dengan `betas: ["server-side-fallback-2026-07-01"]` dan `fallbacks: "default"`. Cek `stop_reason === "refusal"` sebelum membaca isi.
 - **Rahasia** (API key, refresh token, key WAHA) hanya ada di `.env` di VPS. Tidak pernah masuk ke git atau chat.
 - **Laporan pergantian dibuat per platform.** Satu gambar bisa berisi satu atau dua platform.
+- **Filter periode di setiap tab dashboard dan analisis** (rancangan 8a-2):
+  - Pilihan: `Hari ini`, `Kemarin`, `7 hari terakhir`, `30 hari terakhir`, `Minggu ini` (Senin–Minggu), `Minggu lalu`, `Bulan ini`, `Bulan lalu`, `Custom` (memakai sel Dari dan Sampai).
+  - Pembanding: `Periode sebelumnya`, `Bulan lalu tanggal sama`, `Tanpa pembanding`.
+  - Default `Bulan ini` dengan pembanding `Bulan lalu tanggal sama`.
+- **Data tidak pernah dihapus atau di-reset per bulan.** Target bulanan disimpan di tabel Pengaturan dengan kolom Bulan dan Target.
+- **Rumus spreadsheet hanya boleh memakai fungsi yang didukung Google Sheets dan HyperFormula:** `SUMIFS`, `COUNTIFS`, `IF`, `IFERROR`, `MIN`, `MAX`, `DATE`, `TODAY`, `EOMONTH`, `WEEKDAY`, `INDEX`, `MATCH`, `AND`, `OR`. Tanpa `QUERY`, `FILTER`, `ARRAYFORMULA`, dan `LET`.
 
 ## Review Focus
 
@@ -68,6 +75,8 @@ cp-sistem/
     src/domain/ledger.ts          laporan → kredit per host (siaran, reset, jeda, atribusi)
     src/domain/targets.ts         target bulan → per host → per hari; gugur
     src/domain/rekap.ts           angka dashboard, streak, status, analisis live
+    src/domain/period.ts          preset periode → rentang tanggal, rentang pembanding
+    src/domain/sheetFormulas.ts   rumus dashboard berbasis filter (diuji dengan HyperFormula)
     src/domain/messages.ts        teks semua pesan bot + format Rupiah
     src/infra/db.ts               SQLite: messages, reports, outbox, sent_log
     src/infra/extractor.ts        Claude vision → ExtractResult
@@ -409,6 +418,10 @@ dailyByHost(entries: LedgerEntry[], month: string): Record<string, Record<string
 funnel(entries: LedgerEntry[], filter?: { host?: string; from?: string; to?: string }): Funnel
 heatmap(entries: LedgerEntry[], month: string): Record<"Sen–Kam" | "Jum–Min", Record<number, number | null>>  // omzet/jam per jam mulai
 indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  // omzet/jam host ÷ rata-rata semua host di jam yang sama; null kalau data < 21 hari live
+expectedOmzet(entries: LedgerEntry[], month: string): Map<string, number>  // messageId+host → omzet harapan = rata-rata omzet/jam semua host di jam & kelompok hari itu × menit/60
+toKreditRows(entries: LedgerEntry[], attributions, expected: Map<string, number>): KreditRow[]
+// KreditRow = { messageId, tanggal, jam, hariKelompok, host /* atau "(belum teratribusi)" */, platform, omzet, pesanan, penontonMasuk, komentar, keranjang, impresi, pengikutBaru, menitOnAir, omzetHarapan, status: "dihitung" | "belum_teratribusi" }
+// Atribusi pecahan → satu baris per host dengan nilai × porsi.
 ```
 
 **Aturan perhitungan:**
@@ -445,6 +458,50 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
   - `vsBulanLalu` = `null` kalau bulan lalu kosong.
 - [ ] **Step 4:** Jalankan tes. Hasil yang diharapkan: **FAIL**. Implementasikan, lalu jalankan lagi. Hasil yang diharapkan: **PASS**.
 - [ ] **Step 5:** Commit.
+
+---
+
+### Task 6b: Periode filter dan rumus dashboard
+
+**Files:**
+- Create: `bot/src/domain/period.ts`, `bot/src/domain/sheetFormulas.ts`
+- Test: `bot/test/period.test.ts`, `bot/test/sheetFormulas.test.ts`
+
+**Interfaces:**
+- Consumes: `KreditRow` (Task 6) dan baris Target Harian `{ tanggal, host, target, gugur, sebab }` (Task 5).
+- Produces:
+  - `periodRange(preset: Preset, today: string, custom?: { dari: string; sampai: string }): { dari: string; sampai: string }`
+  - `comparisonRange(range, mode: "sebelumnya" | "bulan_lalu" | "tanpa"): { dari: string; sampai: string } | null`
+  - `dashboardFormulas(layout: Layout): Record<string /* A1 sel */, string /* rumus */>` untuk tab Dashboard Host, Harian per Host, Analisis Live, Tren Bulanan, dan Kontrol.
+    - Sel filter ada di `B2` (preset), `D2` (dari), `F2` (sampai), dan `H2` (pembanding).
+    - Sel tersembunyi `J2:K3` berisi rentang efektif dan rentang pembanding yang dihitung dengan rumus. Logikanya harus sama dengan `periodRange` dan `comparisonRange`.
+
+**Aturan:**
+- **Minggu dimulai Senin.**
+- **`Bulan lalu tanggal sama`:** tanggal 1 sampai min(hari sampai, akhir bulan lalu).
+- **`Periode sebelumnya`:** jumlah hari sama, berakhir sehari sebelum `dari`.
+- **Custom dengan Dari > Sampai:** sel status menampilkan "Tanggal tidak valid", dan semua angka kosong (bukan 0).
+
+- [ ] **Step 1:** Tes `periodRange` dengan `today = "2026-11-20"` (hari Jumat):
+  - `Hari ini` menghasilkan `2026-11-20 … 2026-11-20`.
+  - `7 hari terakhir` menghasilkan `11-14 … 11-20`.
+  - `Minggu ini` menghasilkan `11-16 … 11-20`.
+  - `Minggu lalu` menghasilkan `11-09 … 11-15`.
+  - `Bulan lalu` menghasilkan `10-01 … 10-31`.
+  - `Custom 2026-11-01..2026-11-15` dikembalikan apa adanya.
+  - `comparisonRange(Bulan ini, "bulan_lalu")` menghasilkan `10-01 … 10-20`.
+  - `comparisonRange(7 hari terakhir, "sebelumnya")` menghasilkan `11-07 … 11-13`.
+- [ ] **Step 2:** Tes rumus. Muat fixture Data Kredit (data contoh mockup: 3 host, 1–20 Nov, ditambah Oktober) dan Target Harian ke HyperFormula, pasang rumus dari `dashboardFormulas`, lalu set filter. Hasil rumus harus sama dengan fungsi TS (Task 5 dan 6) dalam selisih Rp1 dan 0,0001 untuk rasio:
+  - **Preset `Bulan ini`:** realisasi Brando 11.200.000, target 20.000.000, seharusnya s/d hari ini 13.333.333, pembanding Oktober 1–20.
+  - **`Custom 2026-11-01..2026-11-15`:** realisasi per host sama dengan penjumlahan TS untuk rentang itu.
+  - **Funnel Shopee pada filter `Hari ini`** yang hanya berisi data 17 Nov (dengan `today` = 17 Nov): `atcRate` 0,065.
+  - **Baris `belum_teratribusi`** tidak masuk realisasi host mana pun, tapi muncul di total "belum teratribusi".
+  - **Custom Dari > Sampai** menghasilkan sel kosong dan teks "Tanggal tidak valid".
+  - **Tren Bulanan** baris Oktober dan November sama dengan penjumlahan TS per bulan.
+- [ ] **Step 3:** Jalankan `npx vitest run test/period.test.ts test/sheetFormulas.test.ts`. Hasil yang diharapkan: **FAIL**.
+- [ ] **Step 4:** Implementasikan `period.ts`, lalu `sheetFormulas.ts` dengan rumus `SUMIFS`/`COUNTIFS` di atas kolom tabel Data Kredit dan Target Harian. Pakai daftar fungsi yang diizinkan di Global Constraints. Seluruh tabel memakai rentang kolom penuh, misalnya `'Data Kredit'!$C:$C`.
+- [ ] **Step 5:** Jalankan tes. Hasil yang diharapkan: **PASS**.
+- [ ] **Step 6:** Commit.
 
 ---
 
@@ -570,10 +627,11 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
 - Produces, `SheetsGateway`:
   - `readSettings(): Promise<Settings>`
   - `readKoreksiKeputusan()`, `readAtribusi()`, `readKehadiran()`, `readGangguan()`, `readKalenderLive()`
-  - `apply(op: SheetOp)`, dengan `SheetOp` berupa: `appendSesi` | `appendKoreksi` | `appendGangguan` | `appendKehadiran` | `writeDashboard` | `writeHarian` | `writeAnalisis` | `writeHeartbeat` | `appendLog`
+  - `apply(op: SheetOp)`, dengan `SheetOp` berupa: `appendSesi` | `upsertKredit` (berdasarkan messageId+host) | `writeTargetHarian` (ganti semua baris satu bulan) | `appendKoreksi` | `appendGangguan` | `appendKehadiran` | `writeKondisi` (kotak "kondisi saat ini": streak dan status hari ini) | `writeHeartbeat` | `appendLog`
+  - `readKontrol(): Promise<Record<string, number>>`, membaca nilai rumus di tab Kontrol untuk pengecekan silang
   - `uploadBukti(buf, name): Promise<string>`
   - `readJadwal(): Promise<Array<{ date, host, mulai, selesai }>>` (membaca tab Data Jadwal)
-- Produces, fungsi murni pemetaan baris: `toSesiRows(entries)`, `toDashboardRows(summaries)`, `toHarianRows(...)`, `fromSettingsRows(rows)`.
+- Produces, fungsi murni pemetaan baris: `toSesiRows(entries)`, `toKreditSheetRows(rows: KreditRow[])`, `toTargetHarianRows(targets)`, `fromSettingsRows(rows)`. Tabel target bulanan di Pengaturan dibaca sebagai `{ "2026-10": …, "2026-11": … }`.
 
 - [ ] **Step 1:** Tes `parseIncoming` dengan fixture dari Task 0:
   - Foto bercaption menghasilkan `hasImage:true` dan `text:"Brando"`.
@@ -646,7 +704,11 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
 
 **Interfaces:**
 - Produces:
-  - `refresh(deps, today: string): Promise<{ summaries: HostSummary[]; eskalasiBaru: string[] }>`. Fungsi ini membaca input owner, menerapkan koreksi dan atribusi yang disetujui, menghitung target, ledger, dan rekap, lalu mengantrekan `writeDashboard`, `writeHarian`, `writeAnalisis`, dan `appendSesi` untuk entri yang belum ditulis.
+  - `refresh(deps, today: string): Promise<{ summaries: HostSummary[]; eskalasiBaru: string[] }>`. Fungsi ini membaca input owner, menerapkan koreksi dan atribusi yang disetujui, lalu menghitung target, ledger, dan rekap.
+    - Antrekan `upsertKredit` untuk semua entri bulan berjalan. Bulan lalu juga, kalau ada koreksi atau atribusi yang berubah.
+    - Antrekan `writeTargetHarian` untuk bulan yang inputnya berubah.
+    - Antrekan `writeKondisi` dan `appendSesi` untuk entri yang belum ditulis.
+    - Angka dashboard tidak pernah ditulis sebagai nilai. Semuanya rumus (Task 6b).
   - `startScheduler(deps)` dengan tugas berikut:
     - **Pagi** pada `jamPagi`: kirim `msgPagi` ke grup. Kalau jadwal aktif, hanya untuk host yang masuk shift; kalau tidak, untuk semua host. Tidak dikirim selama `gangguanAktif`.
     - **Rekap** pada `jamRekap`, atau 30 menit setelah laporan terakhir kalau lewat dari `jamRekap`: kirim `msgRekap` ke grup dan `msgOwner` pribadi ke owner.
@@ -655,6 +717,9 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
     - **Flush antrean** setiap 1 menit. Operasi yang gagal dicoba lagi setelah 1, 2, 4, … menit, maksimal 30 menit.
     - **Detak** setiap 5 menit: tulis `writeHeartbeat(now, waStatus)`.
     - **Proses ulang** `pendingExtract` setiap 5 menit.
+    - **Pengecekan silang** setiap hari pukul 23:50:
+      - Bandingkan `readKontrol()` (rumus "bulan ini" per host) dengan `summarizeHosts`.
+      - Kalau selisihnya lebih dari Rp1, catat di Log Bot dan kirim pesan pribadi ke owner: "Angka dashboard tidak cocok untuk <host>, sedang dicek".
   - `catchUp(deps)` saat start: `messagesSince(LIVE_GROUP_ID, lastProcessedTs − 5 menit)`, diurutkan menurut `ts`, lalu setiap pesan masuk ke `handleMessage`.
   - `sendCapped(waId, text)`: kirim pesan inisiatif bot, kecuali kalau `sentCount ≥ maxPesanPerHari`. Dalam hal itu pesan tidak dikirim dan dicatat ke Log Bot.
 
@@ -668,6 +733,7 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
   - Kalau jadwal tidak aktif, tidak ada tag akhir shift.
   - `sendCapped` berhenti setelah 6 pesan.
 - [ ] **Step 3:** Tes `catchUp`: tiga pesan masuk saat bot mati, dan salah satunya sudah ditandai. Hasil yang diharapkan: dua sisanya diproses berurutan, tidak ada yang dobel.
+- [ ] **Step 3b:** Tes pengecekan silang. Gateway palsu mengembalikan nilai Kontrol Brando 11.200.001 dibanding hasil TS 11.200.000, lalu 11.300.000. Hasil yang diharapkan: yang pertama tidak memicu pesan, yang kedua memicu satu pesan ke owner dan satu baris Log Bot.
 - [ ] **Step 4:** Jalankan tes. Hasil yang diharapkan: **FAIL**. Implementasikan, termasuk:
   - `server.ts`: express dengan `POST /webhook/waha` yang memverifikasi header rahasia dari `.env`, lalu memanggil `handleMessage`. Pemrosesan diserialkan dengan antrean satu-per-satu.
   - `GET /health` mengembalikan `200 {ok, waStatus}`.
@@ -685,10 +751,14 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
 - Test: `bot/test/setup-sheet.test.ts` (menguji fungsi murni `sheetBlueprint()`)
 
 **Interfaces:**
-- Produces: `sheetBlueprint(): Array<{ title: string; headers: string[]; editableRanges: string[]; editors: "owner" | "none" }>`, untuk tab berikut:
-  - Dashboard Host
-  - Harian per Host
-  - Analisis Live
+- Produces: `sheetBlueprint(): Array<{ title: string; headers: string[]; editableRanges: string[]; editors: "owner" | "none"; formulas?: Record<string, string>; validations?: Array<{ range: string; kind: "list" | "date"; values?: string[] }>; hidden?: boolean }>`, untuk tab berikut:
+  - Dashboard Host: baris filter `B2/D2/F2/H2` bisa diedit owner, dengan validasi daftar preset dan tanggal. Rumus diambil dari Task 6b. Kotak "Kondisi saat ini" ditulis bot.
+  - Harian per Host: memakai filter sendiri. Barisnya tanggal di rentang terpilih (maksimal 92), kolomnya host.
+  - Analisis Live: memakai filter sendiri.
+  - Tren Bulanan
+  - Data Kredit: ditulis bot, terkunci.
+  - Target Harian: ditulis bot, terkunci.
+  - Kontrol: tersembunyi.
   - Sesi Live
   - Koreksi & Atribusi (kolom yang bisa diedit: Keputusan, Host atribusi, Porsi)
   - Gangguan (kolom yang bisa diedit: Keputusan, Host)
@@ -704,7 +774,9 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
   - Saat kondisi pulih, kirim email "pulih".
 
 - [ ] **Step 1:** Tes `sheetBlueprint`:
-  - Ada 11 tab.
+  - Ada 15 tab.
+  - Setiap tab dashboard dan analisis punya validasi daftar di `B2` dengan 9 preset, validasi tanggal di `D2` dan `F2`, dan hanya `B2:H2` yang bisa diedit owner.
+  - Rumus di blueprint identik dengan `dashboardFormulas()`.
   - Pengaturan hanya mengizinkan kolom Nilai diedit.
   - Sesi Live tidak punya rentang yang bisa diedit.
   - Header Dashboard Host sama dengan kolom di `format-live.png`.
@@ -740,6 +812,11 @@ indeksSlot(entries: LedgerEntry[], host: string, month: string): number | null  
   8. **Live di-reset di tengah sesi:** dengan screenshot layar akhir, kredit benar. Tanpa layar akhir, muncul "siaran belum lengkap" dan permintaan riwayat.
   9. **Laporan pergantian dilewati** (jeda lebih dari 240 menit): muncul baris "belum teratribusi" di Koreksi & Atribusi. Setelah owner memecah 50/50, realisasi ikut berubah.
   10. **Caption salah** (`Rina`): bot bertanya "Ini laporan siapa?".
+  11. **Filter periode:**
+      - Ganti Dashboard Host ke `Kemarin`, `Minggu lalu`, `Bulan lalu`, dan `Custom` (rentang yang mencakup data uji). Angka harus berubah seketika dan cocok dengan penjumlahan manual dari Data Kredit.
+      - Pembanding `Periode sebelumnya` menampilkan rentang yang benar.
+      - Custom terbalik (Dari > Sampai) menampilkan "Tanggal tidak valid".
+      - Tab Kontrol cocok dengan angka bot pada pengecekan silang malam itu.
 - [ ] **Step 4:** Semua skenario harus lulus. Skenario yang gagal kembali ke task pemiliknya, dimulai dengan tes yang mereproduksi kegagalan itu.
 - [ ] **Step 5:** Go-live: pindahkan bot ke grup **CP Live** asli dengan Jadwal aktif = TIDAK. Commit dokumen dan push ke repo.
 
