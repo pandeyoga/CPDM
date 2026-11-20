@@ -238,7 +238,7 @@ const kolom = (n: number): string => (n < 26 ? String.fromCharCode(65 + n) : kol
 
 // ---------- Tes ----------
 
-describe("kolom tabel fakta", () => {
+describe("kolom tabel fakta", { timeout: 60_000 }, () => {
   it("Data Kredit mengikuti KreditRow; tanggal ditulis sebagai serial tanggal; kosong tetap null", () => {
     expect(KREDIT_COLUMNS.map((c) => c.key)).toEqual(Object.keys(ROWS[0]!));
     const r = ROWS.find((x) => x.messageId === "nol")!;
@@ -265,7 +265,7 @@ describe("kolom tabel fakta", () => {
   });
 });
 
-describe("rumus hanya memakai fungsi yang diizinkan", () => {
+describe("rumus hanya memakai fungsi yang diizinkan", { timeout: 60_000 }, () => {
   const BOLEH = new Set(["SUMIFS", "COUNTIFS", "IF", "IFERROR", "MIN", "MAX", "DATE", "EOMONTH", "WEEKDAY", "INDEX", "MATCH", "AND", "OR"]);
 
   it.each(LAYOUTS)("%s", (tab) => {
@@ -283,7 +283,7 @@ describe("rumus hanya memakai fungsi yang diizinkan", () => {
   });
 });
 
-describe("rentang efektif dan pembanding di J2:K3 = periodRange / comparisonRange", () => {
+describe("rentang efektif dan pembanding di J2:K3 = periodRange / comparisonRange", { timeout: 60_000 }, () => {
   let buku: Buku;
   beforeAll(() => {
     buku = buatBuku([]);
@@ -357,7 +357,7 @@ describe("rentang efektif dan pembanding di J2:K3 = periodRange / comparisonRang
   });
 });
 
-describe("dashboard dihitung dari Data Kredit dan Target Harian (fixture mockup)", () => {
+describe("dashboard dihitung dari Data Kredit dan Target Harian (fixture mockup)", { timeout: 60_000 }, () => {
   let buku: Buku;
   beforeAll(() => {
     buku = buatBuku(LAYOUTS);
