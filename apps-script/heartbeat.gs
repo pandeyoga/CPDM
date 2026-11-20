@@ -14,18 +14,24 @@
 var BATAS_MENIT = 10;
 var KUNCI_KEJADIAN = "kejadianDetak";
 
-/** Murni: kembalikan alasan masalah (teks) atau "" kalau sehat. */
+/**
+ * Murni: { status: "belum_aktif" | "sehat" | "masalah", alasan }.
+ * lastSeen kosong = bot belum pernah jalan ("belum_aktif": tidak ada email).
+ */
 function nilaiMasalah_(lastSeen, waStatus, sekarang) {
+  if (lastSeen === "" || lastSeen === null || lastSeen === undefined) return { status: "belum_aktif", alasan: "" };
   var waktu = lastSeen instanceof Date ? lastSeen : new Date(String(lastSeen));
-  if (!lastSeen || isNaN(waktu.getTime())) return "Detak bot belum pernah tercatat.";
+  if (isNaN(waktu.getTime())) return { status: "masalah", alasan: "Waktu detak tidak terbaca: " + lastSeen };
   var menit = Math.floor((sekarang.getTime() - waktu.getTime()) / 60000);
-  if (menit > BATAS_MENIT) return "Detak terakhir " + menit + " menit lalu (batas " + BATAS_MENIT + " menit).";
-  if (String(waStatus).trim() !== "WORKING") return "Status WhatsApp: " + (waStatus || "(kosong)") + " (seharusnya WORKING).";
-  return "";
+  if (menit > BATAS_MENIT) return { status: "masalah", alasan: "Detak terakhir " + menit + " menit lalu (batas " + BATAS_MENIT + " menit)." };
+  if (String(waStatus).trim() !== "WORKING") {
+    return { status: "masalah", alasan: "Status WhatsApp: " + (waStatus || "(kosong)") + " (seharusnya WORKING)." };
+  }
+  return { status: "sehat", alasan: "" };
 }
 
-function emailOwner_(ss) {
-  var baris = ss.getSheetByName("Pengaturan").getRange("A1:B60").getValues();
+function emailOwner_(sheet) {
+  var baris = sheet.getRange("A1:B60").getValues();
   for (var i = 0; i < baris.length; i++) {
     if (String(baris[i][0]).trim() === "Email owner") return String(baris[i][1]).trim();
   }
@@ -33,20 +39,28 @@ function emailOwner_(ss) {
 }
 
 function cekDetak() {
-  var ss = SpreadsheetApp.getActive();
-  var hb = ss.getSheetByName("Heartbeat").getRange("A2:B2").getValues()[0];
-  var email = emailOwner_(ss);
-  if (!email) return; // belum ada alamat tujuan
-  var props = PropertiesService.getScriptProperties();
-  var masalah = nilaiMasalah_(hb[0], hb[1], new Date());
-  var sudahKirim = props.getProperty(KUNCI_KEJADIAN);
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var tabHb = ss.getSheetByName("Heartbeat");
+    var tabPeng = ss.getSheetByName("Pengaturan");
+    if (!tabHb || !tabPeng) { Logger.log("Tab Heartbeat atau Pengaturan tidak ditemukan"); return; }
+    var email = emailOwner_(tabPeng);
+    if (!email) { Logger.log("Email owner belum diisi di Pengaturan; tidak ada email dikirim"); return; }
+    var hb = tabHb.getRange("A2:B2").getValues()[0];
+    var hasil = nilaiMasalah_(hb[0], hb[1], new Date());
+    if (hasil.status === "belum_aktif") return;
+    var props = PropertiesService.getScriptProperties();
+    var sudahKirim = props.getProperty(KUNCI_KEJADIAN);
 
-  if (masalah && !sudahKirim) {
-    MailApp.sendEmail(email, "[CP Live] Bot bermasalah", masalah + "\nCek VPS: docker compose ps dan log bot.");
-    props.setProperty(KUNCI_KEJADIAN, new Date().toISOString());
-  } else if (!masalah && sudahKirim) {
-    MailApp.sendEmail(email, "[CP Live] Bot pulih", "Detak bot normal lagi dan WhatsApp berstatus WORKING.");
-    props.deleteProperty(KUNCI_KEJADIAN);
+    if (hasil.status === "masalah" && !sudahKirim) {
+      MailApp.sendEmail(email, "[CP Live] Bot bermasalah", hasil.alasan + "\nCek VPS: docker compose ps dan log bot.");
+      props.setProperty(KUNCI_KEJADIAN, new Date().toISOString());
+    } else if (hasil.status === "sehat" && sudahKirim) {
+      MailApp.sendEmail(email, "[CP Live] Bot pulih", "Detak bot normal lagi dan WhatsApp berstatus WORKING.");
+      props.deleteProperty(KUNCI_KEJADIAN);
+    }
+  } catch (e) {
+    Logger.log("cekDetak gagal: " + e);
   }
 }
 

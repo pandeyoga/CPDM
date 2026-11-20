@@ -3,7 +3,7 @@ import type { drive_v3, sheets_v4 } from "googleapis";
 import { klienGoogle, PENGATURAN_KEYS, PENGATURAN_KEY_ORDER, TAB } from "../src/infra/sheets.js";
 import {
   formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint, spreadsheetPropsRequest,
-  tabCells, tabRequests, validationRequests, valueRanges, LOCALE, ZONA_WAKTU, type CellValue, type TabBlueprint,
+  tabCellsTerpisah, tabRequests, validationRequests, valueRanges, LOCALE, ZONA_WAKTU, type CellValue, type TabBlueprint,
 } from "../src/infra/sheetBlueprint.js";
 
 /**
@@ -38,8 +38,11 @@ export async function setupSheet(
   env: { spreadsheetId?: string; buktiFolderId?: string; ownerEmail?: string },
 ): Promise<{ spreadsheetId: string; buktiFolderId: string }> {
   const bp = sheetBlueprint();
-  const email = env.ownerEmail ?? (await drive.about.get({ fields: "user(emailAddress)" })).data.user?.emailAddress;
-  if (!email) throw new Error("Email owner tidak diketahui: isi OWNER_EMAIL");
+  // Editor proteksi selalu akun OAuth (yang dipakai bot menulis) ditambah OWNER_EMAIL bila berbeda.
+  const akun = (await drive.about.get({ fields: "user(emailAddress)" })).data.user?.emailAddress;
+  if (!akun) throw new Error("Email akun Google tidak terbaca dari Drive");
+  const editors = [akun, ...(env.ownerEmail && env.ownerEmail !== akun ? [env.ownerEmail] : [])];
+  const email = env.ownerEmail ?? akun;
 
   let id = env.spreadsheetId;
   if (!id) {
@@ -66,21 +69,26 @@ export async function setupSheet(
     ...namedRangeRequests(ids, namedLama),
     ...validationRequests(bp, ids),
     ...formatRequests(bp, ids),
-    ...protectionRequests(bp, ids, email, protectedLama),
+    ...protectionRequests(bp, ids, editors, protectedLama),
   ];
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests } });
 
   // Isi: header, label, rumus selalu ditulis ulang; nilai bawaan hanya ke sel kosong.
   const terisi = await bacaSel(sheets, id, bp);
+  const statik: sheets_v4.Schema$ValueRange[] = [];
   const data: sheets_v4.Schema$ValueRange[] = [];
   for (const t of bp) {
-    data.push(...valueRanges(t.title, tabCells(t)));
+    const sel = tabCellsTerpisah(t);
+    statik.push(...valueRanges(t.title, sel.statik));
+    data.push(...valueRanges(t.title, sel.rumus));
     const kosong = new Map<string, CellValue>();
     for (const [a1, v] of Object.entries(t.defaults ?? {})) if (!terisi.has(`${kutip(t.title)}!${a1}`)) kosong.set(a1, v);
     const emailSel = `B${PENGATURAN_KEY_ORDER.indexOf(PENGATURAN_KEYS.ownerEmail) + 2}`;
     if (t.title === TAB.pengaturan && !terisi.has(`${kutip(t.title)}!${emailSel}`)) kosong.set(emailSel, email);
     data.push(...valueRanges(t.title, kosong));
   }
+  // Header/label statis RAW ("+Omzet" tidak boleh dibaca sebagai rumus); rumus dan nilai bawaan USER_ENTERED.
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "RAW", data: statik } });
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "USER_ENTERED", data } });
 
   const buktiFolderId = env.buktiFolderId ?? (await pastikanFolder(drive));

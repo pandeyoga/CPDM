@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import type { sheets_v4 } from "googleapis";
+import { describe, expect, it, vi } from "vitest";
 import {
   a1ToGrid, formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint,
-  spreadsheetPropsRequest, tabRequests, validationRequests, valueRanges, NAMED_RANGES,
+  spreadsheetPropsRequest, tabCells, tabCellsTerpisah, tabRequests, validationRequests, valueRanges, NAMED_RANGES,
 } from "../src/infra/sheetBlueprint.js";
 import { dashboardFormulas, type Layout } from "../src/domain/sheetFormulas.js";
 import { PRESETS } from "../src/domain/period.js";
@@ -147,7 +149,7 @@ describe("penyusun request", () => {
   });
 
   it("proteksi: semua tab, owner sebagai editor, tanpa peringatan saja, rentang bebas kunci", () => {
-    const r = protectionRequests(bp, ids, "owner@example.com", [
+    const r = protectionRequests(bp, ids, ["owner@example.com", "lain@example.com"], [
       { protectedRangeId: 9, description: "CP: Gangguan" }, { protectedRangeId: 10, description: "buatan owner" },
     ]);
     expect(r.filter((x) => x.deleteProtectedRange)).toEqual([{ deleteProtectedRange: { protectedRangeId: 9 } }]);
@@ -155,7 +157,7 @@ describe("penyusun request", () => {
     expect(add).toHaveLength(15);
     for (const p of add) {
       expect(p.warningOnly).toBe(false);
-      expect(p.editors).toEqual({ users: ["owner@example.com"] });
+      expect(p.editors).toEqual({ users: ["owner@example.com", "lain@example.com"] });
       expect(p.range).toEqual({ sheetId: p.range!.sheetId });
     }
     const dash = add.find((p) => p.range!.sheetId === ids.get("Dashboard Host"))!;
@@ -215,11 +217,140 @@ describe("setupSheet (klien palsu)", () => {
     expect(reqs.some((r) => "deleteProtectedRange" in r)).toBe(true);
     expect(reqs.some((r) => "deleteNamedRange" in r)).toBe(true);
     expect(reqs.some((r) => "addSheet" in r)).toBe(false);
-    const ditulis = calls[1]!.data!.map((d) => d.range);
+    const ditulis = calls[2]!.data!.map((d) => d.range);
     expect(ditulis).not.toContain("'Pengaturan'!B2");
     expect(ditulis).not.toContain("'Dashboard Host'!B2");
     expect(ditulis).toContain("'Dashboard Host'!H2");
     expect(ditulis).toContain("'Pengaturan'!B3");
     expect(ditulis).toContain("'Pengaturan'!B10");
+  });
+});
+
+describe("invarian tulis ulang", () => {
+  const sama = (a: sheets_v4.Schema$GridRange, b: sheets_v4.Schema$GridRange): boolean => {
+    const inf = Number.MAX_SAFE_INTEGER;
+    return a.startRowIndex! < (b.endRowIndex ?? inf) && b.startRowIndex! < (a.endRowIndex ?? inf) &&
+      a.startColumnIndex! < b.endColumnIndex! && b.startColumnIndex! < a.endColumnIndex!;
+  };
+  it("sel yang ditulis ulang (header, label, rumus) tidak pernah di dalam rentang edit owner", () => {
+    for (const t of bp) {
+      const edit = t.editableRanges.map((r) => a1ToGrid(r, 1));
+      for (const a1 of tabCells(t).keys()) {
+        const g = a1ToGrid(a1, 1);
+        expect(edit.some((e) => sama(e, g)), `${t.title}!${a1}`).toBe(false);
+      }
+      for (const a1 of Object.keys(t.defaults ?? {})) expect(Object.keys(t.formulas ?? {})).not.toContain(a1);
+    }
+  });
+  it("hanya string berawalan = yang masuk jalur USER_ENTERED; header '+Omzet' tetap statis (RAW)", () => {
+    for (const t of bp) {
+      const { statik, rumus } = tabCellsTerpisah(t);
+      for (const [a1, v] of statik) if (typeof v === "string") expect(v, `${t.title}!${a1}`).not.toMatch(/^=/);
+      for (const v of rumus.values()) expect(String(v).startsWith("=")).toBe(true);
+    }
+    expect(tabCellsTerpisah(tab("Sesi Live")).statik.get("G1")).toBe("+Omzet");
+  });
+});
+
+describe("heartbeat.gs", () => {
+  const src = readFileSync(new URL("../../apps-script/heartbeat.gs", import.meta.url), "utf8");
+  function muat(hb: unknown[], email = "o@example.com", sheetsAda = true, props: Record<string, string> = {}) {
+    const mails: string[][] = [];
+    const logs: string[] = [];
+    const sheet = (nilai: unknown[][]) => ({ getRange: () => ({ getValues: () => nilai }) });
+    const tab = new Map([["Heartbeat", sheet([hb])], ["Pengaturan", sheet([["Email owner", email]])]]);
+    const env = {
+      SpreadsheetApp: { getActive: () => ({ getSheetByName: (n: string) => (sheetsAda ? tab.get(n) ?? null : null) }) },
+      MailApp: { sendEmail: (to: string, sub: string) => void mails.push([to, sub]) },
+      PropertiesService: { getScriptProperties: () => ({
+        getProperty: (k: string) => props[k] ?? null, setProperty: (k: string, v: string) => void (props[k] = v),
+        deleteProperty: (k: string) => void delete props[k] }) },
+      Logger: { log: (m: string) => void logs.push(m) },
+      ScriptApp: {},
+    };
+    const f = new Function("SpreadsheetApp", "MailApp", "PropertiesService", "Logger", "ScriptApp", `${src}\nreturn { cekDetak, nilaiMasalah_ };`)(
+      env.SpreadsheetApp, env.MailApp, env.PropertiesService, env.Logger, env.ScriptApp) as { cekDetak(): void; nilaiMasalah_(a: unknown, b: unknown, n: Date): { status: string } };
+    return { f, mails, logs, props };
+  }
+  const NOW = new Date("2026-11-20T10:00:00Z");
+
+  it("nilaiMasalah_: sehat, basi, WA bukan WORKING, kosong = belum aktif", () => {
+    const { f } = muat([]);
+    expect(f.nilaiMasalah_("2026-11-20T09:55:00Z", "WORKING", NOW).status).toBe("sehat");
+    expect(f.nilaiMasalah_("2026-11-20T09:49:00Z", "WORKING", NOW).status).toBe("masalah");
+    expect(f.nilaiMasalah_("2026-11-20T09:55:00Z", "STOPPED", NOW).status).toBe("masalah");
+    expect(f.nilaiMasalah_("", "", NOW).status).toBe("belum_aktif");
+  });
+
+  it("satu email per kejadian, lalu email pulih", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW);
+      const props: Record<string, string> = {};
+      const basi = muat(["2026-11-20T09:30:00Z", "WORKING"], "o@example.com", true, props);
+      basi.f.cekDetak(); basi.f.cekDetak();
+      expect(basi.mails).toEqual([["o@example.com", "[CP Live] Bot bermasalah"]]);
+      const pulih = muat(["2026-11-20T09:58:00Z", "WORKING"], "o@example.com", true, props);
+      pulih.f.cekDetak(); pulih.f.cekDetak();
+      expect(pulih.mails).toEqual([["o@example.com", "[CP Live] Bot pulih"]]);
+      expect(props).toEqual({});
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("A2 kosong: tanpa email; tab hilang/email kosong: tidak melempar, dicatat", () => {
+    const kosong = muat(["", ""]);
+    kosong.f.cekDetak();
+    expect(kosong.mails).toEqual([]);
+    const hilang = muat(["x", "y"], "o@example.com", false);
+    expect(() => hilang.f.cekDetak()).not.toThrow();
+    expect(hilang.logs).toHaveLength(1);
+    const tanpaEmail = muat(["2020-01-01T00:00:00Z", "WORKING"], "");
+    tanpaEmail.f.cekDetak();
+    expect(tanpaEmail.mails).toEqual([]);
+    expect(tanpaEmail.logs[0]).toMatch(/Email owner/);
+  });
+});
+
+describe("setupSheet: editor proteksi dan RAW", () => {
+  async function jalan(ownerEmail?: string) {
+    const { setupSheet } = await import("../scripts/setup-sheet.js");
+    const titles = sheetBlueprint().map((t) => t.title);
+    const reqs: unknown[][] = [];
+    const modes: Array<{ mode: string; data: Array<{ range: string; values: unknown[][] }> }> = [];
+    const sheets = { spreadsheets: {
+      get: async () => ({ data: { sheets: titles.map((title, i) => ({ properties: { sheetId: 100 + i, title } })) } }),
+      batchUpdate: async (a: { requestBody: { requests: unknown[] } }) => void reqs.push(a.requestBody.requests),
+      values: { batchGet: async () => ({ data: { valueRanges: [] } }),
+        batchUpdate: async (a: { requestBody: { valueInputOption: string; data: Array<{ range: string; values: unknown[][] }> } }) =>
+          void modes.push({ mode: a.requestBody.valueInputOption, data: a.requestBody.data }) },
+    } };
+    const drive = { about: { get: async () => ({ data: { user: { emailAddress: "oauth@example.com" } } }) },
+      files: { list: async () => ({ data: { files: [{ id: "F" }] } }) } };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await setupSheet(sheets as any, drive as any, { spreadsheetId: "S", ...(ownerEmail ? { ownerEmail } : {}) });
+    const adds = (reqs[0] as Array<{ addProtectedRange?: { protectedRange: { editors: { users: string[] } } } }>).filter((r) => r.addProtectedRange);
+    return { users: adds.map((r) => r.addProtectedRange!.protectedRange.editors.users), modes };
+  }
+  it("editor selalu akun OAuth; OWNER_EMAIL berbeda ditambahkan", async () => {
+    expect((await jalan()).users.every((u) => u.length === 1 && u[0] === "oauth@example.com")).toBe(true);
+    expect((await jalan("oauth@example.com")).users[0]).toEqual(["oauth@example.com"]);
+    expect((await jalan("lain@example.com")).users[0]).toEqual(["oauth@example.com", "lain@example.com"]);
+  });
+  it("header statis ditulis RAW, rumus USER_ENTERED", async () => {
+    const { modes } = await jalan();
+    expect(modes.map((m) => m.mode)).toEqual(["RAW", "USER_ENTERED"]);
+    const raw = modes[0]!.data.flatMap((d) => d.values[0]!);
+    expect(raw).toContain("+Omzet");
+    expect(modes[1]!.data.flatMap((d) => d.values[0]!)).not.toContain("+Omzet");
+    expect(modes[1]!.data.some((d) => d.range === "'Kontrol'!F2")).toBe(true);
+  });
+});
+
+describe("validasi host dari DAFTAR_HOST", () => {
+  it("Gangguan dan Kehadiran: kolom Host ONE_OF_RANGE", () => {
+    const ids = resolveSheetIds(bp, new Map());
+    const r = validationRequests(bp, ids).filter((x) => x.setDataValidation?.rule?.condition?.type === "ONE_OF_RANGE");
+    expect(r.map((x) => x.setDataValidation!.range!.sheetId).sort()).toEqual([ids.get("Gangguan"), ids.get("Kehadiran")].sort());
+    expect(r[0]!.setDataValidation!.rule!.condition!.values![0]!.userEnteredValue).toBe("=Pengaturan!$G$2:$G$11");
   });
 });

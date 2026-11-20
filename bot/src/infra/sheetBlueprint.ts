@@ -13,7 +13,7 @@ import {
  * Penyusun request batchUpdate di bawah dipakai scripts/setup-sheet.ts.
  */
 
-export type ValidationKind = "list" | "date" | "custom";
+export type ValidationKind = "list" | "date" | "custom" | "range";
 export interface Validation { range: string; kind: ValidationKind; values?: string[]; formula?: string; pesan?: string }
 export type FormatKind = "rupiah" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "sembunyi";
 export interface TabFormat { range: string; kind: FormatKind }
@@ -153,6 +153,9 @@ const kunci = (title: string, headers: readonly string[], formats: TabFormat[] =
   title, headers: [...headers], editableRanges: [], editors: "none", formats,
 });
 const daftar = (range: string, values: string[]): Validation => ({ range, kind: "list", values });
+/** Daftar host untuk validasi kolom Host (rentang yang sama dengan nama DAFTAR_HOST). */
+const DAFTAR_HOST_SUMBER = `=${TAB.pengaturan}!$G$${BARIS_HOST.pertama}:$G$${BARIS_HOST.terakhir}`;
+const hostDariDaftar = (range: string): Validation => ({ range, kind: "range", formula: DAFTAR_HOST_SUMBER });
 const KEPUTUSAN = ["Menunggu", "Setujui", "Tolak"];
 const KEPUTUSAN_LAIN = ["Menunggu", "Disetujui", "Ditolak"];
 
@@ -225,11 +228,12 @@ export function sheetBlueprint(): TabBlueprint[] {
     },
     {
       title: TAB.gangguan, headers: [...GANGGUAN_HEADERS], editableRanges: ["B2:B", "G2:G"], editors: "owner",
-      validations: [daftar("G2:G", KEPUTUSAN_LAIN)], formats: [{ range: "A2:A", kind: "tanggal" }, { range: "C2:D", kind: "jam" }],
+      validations: [daftar("G2:G", KEPUTUSAN_LAIN), hostDariDaftar("B2:B")], formats: [{ range: "A2:A", kind: "tanggal" }, { range: "C2:D", kind: "jam" }],
     },
     {
       title: TAB.kehadiran, headers: [...KEHADIRAN_HEADERS], editableRanges: ["A2:D", "F2:F"], editors: "owner",
       validations: [
+        hostDariDaftar("B2:B"),
         daftar("C2:C", ["Sakit", "Izin", "Cuti", "Telat"]),
         daftar("F2:F", [...KEPUTUSAN_LAIN, "Tanpa keterangan"]),
         { range: "A2:A", kind: "date" },
@@ -318,6 +322,7 @@ export function validationRequests(bp: TabBlueprint[], ids: ReadonlyMap<string, 
     (t.validations ?? []).map((v): Request => {
       const condition: sheets_v4.Schema$BooleanCondition =
         v.kind === "list" ? { type: "ONE_OF_LIST", values: (v.values ?? []).map((x) => ({ userEnteredValue: x })) }
+        : v.kind === "range" ? { type: "ONE_OF_RANGE", values: [{ userEnteredValue: v.formula ?? "" }] }
         : v.kind === "date" ? { type: "DATE_IS_VALID" }
         : { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: v.formula ?? "" }] };
       const rule: sheets_v4.Schema$DataValidationRule = { condition, strict: true };
@@ -350,7 +355,7 @@ export function formatRequests(bp: TabBlueprint[], ids: ReadonlyMap<string, numb
 
 /** Setiap tab dilindungi penuh (bukan sekadar peringatan); hanya owner editor; rentang input owner dibebaskan. */
 export function protectionRequests(
-  bp: TabBlueprint[], ids: ReadonlyMap<string, number>, ownerEmail: string,
+  bp: TabBlueprint[], ids: ReadonlyMap<string, number>, editorEmails: string[],
   existing: Array<{ protectedRangeId: number; description?: string | null }>,
 ): Request[] {
   const out: Request[] = existing
@@ -360,7 +365,7 @@ export function protectionRequests(
     const sheetId = ids.get(t.title)!;
     const protectedRange: sheets_v4.Schema$ProtectedRange = {
       range: { sheetId }, description: `${PROTECT_PREFIX}${t.title}`, warningOnly: false,
-      requestingUserCanEdit: true, editors: { users: [ownerEmail] },
+      requestingUserCanEdit: true, editors: { users: [...new Set(editorEmails)] },
     };
     if (t.editableRanges.length > 0) protectedRange.unprotectedRanges = t.editableRanges.map((r) => a1ToGrid(r, sheetId));
     out.push({ addProtectedRange: { protectedRange } });
@@ -400,4 +405,14 @@ export function tabCells(t: TabBlueprint): Map<string, CellValue> {
   for (const [a1, v] of Object.entries(t.values ?? {})) cells.set(a1, v);
   for (const [a1, f] of Object.entries(t.formulas ?? {})) cells.set(a1, f);
   return cells;
+}
+
+export const adalahRumus = (v: CellValue): boolean => typeof v === "string" && v.startsWith("=");
+
+/** Pisahkan sel tab: `rumus` (mulai "=") ditulis USER_ENTERED; `statik` (header, label) ditulis RAW supaya "+Omzet" bukan rumus. */
+export function tabCellsTerpisah(t: TabBlueprint): { statik: Map<string, CellValue>; rumus: Map<string, CellValue> } {
+  const statik = new Map<string, CellValue>();
+  const rumus = new Map<string, CellValue>();
+  for (const [a1, v] of tabCells(t)) (adalahRumus(v) ? rumus : statik).set(a1, v);
+  return { statik, rumus };
 }
