@@ -109,4 +109,28 @@ describe("targetHarianRows", () => {
       expect(cum).toBeCloseTo(seharusnya(t.Brando!, inp, "Brando", date), 4);
     }
   });
+  it("host tanpa shift: awal 0, host lain naik, invarian tetap", () => {
+    const jadwal = [
+      { date: "2026-11-17", host: "Brando", mulai: "06:00", selesai: "13:00" },
+      { date: "2026-11-18", host: "Brando", mulai: "06:00", selesai: "13:00" },
+      { date: "2026-11-17", host: "Vanna", mulai: "13:00", selesai: "20:00" },
+    ];
+    const inp = base({ jamLive: 11, jadwal });
+    const t = computeTargets(inp); const rows = targetHarianRows(t, inp);
+    expect(t.Brando!.awal).toBeCloseTo(40_000_000, 4);
+    expect(t.Vanna!.awal).toBeCloseTo(20_000_000, 4);
+    expect(t.Linda!.awal).toBe(0);
+    expect(t.Linda!.bulan).toBe(0);
+    expect(rows.filter((x) => x.host === "Linda")).toHaveLength(0);
+    for (const h of ["Brando", "Vanna", "Linda"]) {
+      const r = rows.filter((x) => x.host === h);
+      expect(r.reduce((s, x) => s + x.target, 0)).toBeCloseTo(t[h]!.awal, 4);
+      expect(r.reduce((s, x) => s + x.gugur, 0)).toBeCloseTo(t[h]!.awal - t[h]!.bulan, 4);
+      for (const date of ["2026-11-17", "2026-11-18", "2026-11-30"]) {
+        const cum = r.filter((x) => x.tanggal <= date).reduce((s, x) => s + x.target - x.gugur, 0);
+        expect(cum).toBeCloseTo(seharusnya(t[h]!, inp, h, date), 4);
+      }
+    }
+    expect(butuhPerHariKerja(t.Linda!, 0, inp, "Linda", "2026-11-30")).toBe(0);
+  });
 });

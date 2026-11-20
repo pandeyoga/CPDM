@@ -56,8 +56,8 @@ function monthlyHours(inp: TargetInputs, host: string): number {
 }
 
 function awalOf(inp: TargetInputs, host: string): number {
-  const total = inp.hosts.reduce((s, h) => s + activeDays(inp, h.name).length, 0);
-  return total === 0 ? 0 : (inp.teamTarget * activeDays(inp, host).length) / total;
+  const total = inp.hosts.reduce((s, h) => s + workDays(inp, h.name).length, 0);
+  return total === 0 ? 0 : (inp.teamTarget * workDays(inp, host).length) / total;
 }
 
 export function computeTargets(inp: TargetInputs): Record<string, HostTarget> {
