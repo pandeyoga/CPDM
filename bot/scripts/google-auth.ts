@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { google } from "googleapis";
@@ -19,15 +20,21 @@ if (!clientId || !clientSecret) {
 const server = createServer();
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as AddressInfo).port;
-const redirectUri = `http://localhost:${port}`;
+const redirectUri = `http://127.0.0.1:${port}`;
+const state = randomBytes(16).toString("hex");
 const oauth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
-const url = oauth.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES });
+const url = oauth.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES, state });
 console.error(`Buka tautan ini di browser dan setujui akses:\n${url}\n`);
 
 const code = await new Promise<string>((resolve, reject) => {
   server.on("request", (req, res) => {
     const u = new URL(req.url ?? "/", redirectUri);
+    if (u.searchParams.get("state") !== state) {
+      res.statusCode = 400;
+      res.end("State tidak cocok.");
+      return;
+    }
     const kode = u.searchParams.get("code");
     const galat = u.searchParams.get("error");
     res.setHeader("Content-Type", "text/plain; charset=utf-8");

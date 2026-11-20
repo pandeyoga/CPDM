@@ -4,7 +4,7 @@ import type { KreditRow } from "../src/domain/rekap.js";
 import type { LedgerEntry } from "../src/domain/types.js";
 import {
   fromSettingsRows, mergeKredit, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
-  parseKehadiranRows, parseKoreksiRows, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
+  parseJadwalRows, parseKehadiranRows, parseKoreksiRows, mergeTargetHarian, tailClearRange, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
   type SheetOp,
 } from "../src/infra/sheets.js";
 
@@ -24,7 +24,8 @@ describe("fromSettingsRows", () => {
     ["Email owner", "owner@example.com"],
   ];
   it("membaca nilai", () => {
-    const s = fromSettingsRows(rows);
+    const { value: s, invalid } = fromSettingsRows(rows);
+    expect(invalid).toEqual([]);
     expect(s.jadwalAktif).toBe(false);
     expect(s.teamTarget).toEqual({ "2026-10": 50000000, "2026-11": 60000000 });
     expect(s).toMatchObject({ liveMulai: "09:00", liveSelesai: "22:00", jamPagi: "08:30", jamRekap: "22:30", maxGapMenit: 180, maxPesanPerHari: 5, ownerEmail: "owner@example.com", ownerWaId: "6281234567890@c.us" });
@@ -34,11 +35,40 @@ describe("fromSettingsRows", () => {
     ]);
   });
   it("YA menjadi true; kosong memakai bawaan", () => {
-    expect(fromSettingsRows([["x", "y"], ["Jadwal aktif", "YA"]]).jadwalAktif).toBe(true);
-    expect(fromSettingsRows([])).toEqual({
+    expect(fromSettingsRows([["x", "y"], ["Jadwal aktif", "YA"]]).value.jadwalAktif).toBe(true);
+    expect(fromSettingsRows([])).toEqual({ invalid: [], value: {
       teamTarget: {}, jadwalAktif: false, liveMulai: "09:00", liveSelesai: "22:00", jamPagi: "08:00", jamRekap: "22:30",
       maxGapMenit: 240, maxPesanPerHari: 6, hosts: [], ownerWaId: "", ownerEmail: "",
+    } });
+  });
+});
+
+describe("fromSettingsRows: input tak valid", () => {
+  const pengaturan = (key: string, v: unknown): unknown[][] => [["Pengaturan", "Nilai"], [key, v]];
+  it.each([["Jam live mulai", "24:00"], ["Jam live mulai", "25:99"], ["Jam live mulai", 9], ["Jam rekap", "abc"], ["Batas jeda (menit)", "1,5"], ["Batas jeda (menit)", 0], ["Jadwal aktif", "mungkin"], ["No WA owner", "12"]])(
+    "%s = %s → bawaan + dilaporkan", (key, v) => {
+      const { value, invalid } = fromSettingsRows(pengaturan(key, v));
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]).toMatchObject({ tab: "Pengaturan", row: 2 });
+      expect(value).toEqual(fromSettingsRows([]).value);
     });
+  it("tanggal/bulan/target/host tak valid", () => {
+    const rows: unknown[][] = [
+      ["h"],
+      ["", "", "", "2026-13-01", 1, "", "A", "x1", "2026-13-45", "2026-02-30"],
+      ["", "", "", "2026-11", "1,317"],
+      ["", "", "", "2026-12", "1e3"],
+    ];
+    const { value, invalid } = fromSettingsRows(rows);
+    expect(value.teamTarget).toEqual({});
+    expect(value.hosts).toEqual([{ name: "A" }]);
+    expect(invalid.map((i) => i.row)).toEqual([2, 2, 2, 2, 3, 4]);
+  });
+  it("melebihi 10 host dilaporkan", () => {
+    const rows: unknown[][] = [["h"], ...Array.from({ length: 11 }, (_, i) => ["", "", "", "", "", "", `H${i}`])];
+    const { value, invalid } = fromSettingsRows(rows);
+    expect(value.hosts).toHaveLength(10);
+    expect(invalid).toHaveLength(1);
   });
 });
 
@@ -114,27 +144,59 @@ describe("parser tab owner", () => {
       [46346, "", "x", 1, 2, "Setujui", "Brando 50, Vanna 50", "m3", "tiktok", "atribusi", "", ""],
       [46346, "", "x", 1, 2, "Setujui", "Budi", "m4", "tiktok", "atribusi", "", ""],
     ];
-    expect(parseKoreksiRows(rows)).toEqual([{ messageId: "m1", platform: "shopee", field: "omzet", value: 1350000 }]);
-    const a = parseAtribusiRows(rows, hosts);
+    expect(parseKoreksiRows(rows).value).toEqual([{ messageId: "m1", platform: "shopee", field: "omzet", value: 1350000 }]);
+    const { value: a, invalid } = parseAtribusiRows(rows, hosts);
+    expect(invalid).toEqual([{ tab: "Koreksi & Atribusi", row: 5, reason: expect.stringContaining("Budi") }]);
     expect([...a.keys()]).toEqual(["m3|tiktok"]);
     expect(a.get("m3|tiktok")).toEqual([{ host: "Brando", share: 0.5 }, { host: "Vanna", share: 0.5 }]);
   });
   it("kehadiran, gangguan, kalender", () => {
-    expect(parseKehadiranRows([["h"], [46346, "Brando", "Sakit", "", "bot", "Disetujui"], [46346, "Vanna", "Telat", "", "", "Disetujui"], [46347, "Linda", "Izin", "", "", "Menunggu"]]))
-      .toEqual([{ host: "Brando", date: "2026-11-20" }]);
-    expect(parseGangguanRows([["h"], [46346, "Vanna", "14:00", "16:00", "listrik", "bot", "Disetujui"], [46346, "Vanna", 0.5, 0.5416666667, "", "", "Menunggu"]]))
-      .toEqual([{ host: "Vanna", date: "2026-11-20", menit: 120 }]);
-    expect(parseKalenderRows([["h"], [46346, "libur"], ["2026-12-25", ""], ["", ""]])).toEqual(["2026-11-20", "2026-12-25"]);
+    const k = parseKehadiranRows([["h"], [46346, "Brando", "Sakit", "", "bot", "Disetujui"], [46346, "Vanna", "Telat", "", "", "Disetujui"], [46347, "Linda", "Izin", "", "", "Menunggu"]]);
+    expect(k).toEqual({ value: [{ host: "Brando", date: "2026-11-20" }], invalid: [] });
+    const g = parseGangguanRows([["h"], [46346, "Vanna", "14:00", "16:00", "listrik", "bot", "Disetujui"], [46346, "Vanna", 0.5, 0.5416666667, "", "", "Menunggu"]]);
+    expect(g).toEqual({ value: [{ host: "Vanna", date: "2026-11-20", menit: 120 }], invalid: [] });
+    expect(parseKalenderRows([["h"], [46346, "libur"], ["2026-12-25", ""], ["", ""]])).toEqual({ value: ["2026-11-20", "2026-12-25"], invalid: [] });
+  });
+  it("baris tak valid dilaporkan dengan nomor baris", () => {
+    const k = parseKehadiranRows([["h"], ["2026-13-45", "Brando", "Sakit", "", "", "Disetujui"], [46346, "", "Izin", "", "", "Disetujui"], [46346, "A", "Libur", "", "", "Disetujui"]]);
+    expect(k.value).toEqual([]);
+    expect(k.invalid.map((i) => [i.tab, i.row])).toEqual([["Kehadiran", 2], ["Kehadiran", 3], ["Kehadiran", 4]]);
+    const g = parseGangguanRows([["h"], [46346, "V", "24:00", "16:00", "", "", "Disetujui"], [46346, "V", "16:00", "14:00", "", "", "Disetujui"]]);
+    expect(g.invalid.map((i) => i.row)).toEqual([2, 3]);
+    expect(parseKalenderRows([["h"], ["bukan tanggal"], [46346]]).invalid).toHaveLength(1);
+    expect(parseJadwalRows([["h"], [46346, "A", "09:00", "12:00"], [46346, "A", 9, "12:00"]])).toMatchObject({ value: [{ host: "A" }], invalid: [{ row: 3 }] });
+  });
+  it("koreksi: field tidak peka huruf besar; angka ketat", () => {
+    const row = (nilai: unknown, field = "Omzet"): unknown[] => [46346, "L", "x", 1, 2, "Setujui", "", "m1", "Shopee", "Koreksi", field, nilai];
+    expect(parseKoreksiRows([["h"], row(1350000)]).value).toEqual([{ messageId: "m1", platform: "shopee", field: "omzet", value: 1350000 }]);
+    expect(parseKoreksiRows([["h"], row("Rp1.350.000")]).value[0]?.value).toBe(1350000);
+    expect(parseKoreksiRows([["h"], row("1350.5")]).value[0]?.value).toBe(1350.5);
+    for (const bad of ["1,317", "1,5", "1e3", "0x10", "abc"]) {
+      const r = parseKoreksiRows([["h"], row(bad)]);
+      expect(r.value, bad).toEqual([]);
+      expect(r.invalid, bad).toHaveLength(1);
+    }
+    expect(parseKoreksiRows([["h"], row(5, "ngawur")]).invalid).toHaveLength(1);
+  });
+});
+
+describe("fungsi murni tabel", () => {
+  it("mergeTargetHarian dan tailClearRange", () => {
+    const old = [[46300, "A", 1, 0, ""], [46346, "A", 1, 0, ""], ["x", "A", 1, 0, ""]];
+    expect(mergeTargetHarian(old, "2026-11", [])).toEqual([old[0], old[2]]);
+    expect(tailClearRange("T", 5, 2, 5)).toBe("'T'!A4:E6");
+    expect(tailClearRange("T", 5, 5, 5)).toBeNull();
+    expect(tailClearRange("T", 5, 0, 1)).toBe("'T'!A2:E2");
   });
 });
 
 describe("apply dispatch", () => {
-  function fakeSheets(): { sheets: never; calls: Array<[string, unknown]> } {
+  function fakeSheets(rows: unknown[][] = [["m1", 46346, 11, "Jum–Min", "Brando", "tiktok"]]): { sheets: never; calls: Array<[string, unknown]> } {
     const calls: Array<[string, unknown]> = [];
     const rec = (n: string, data: unknown = {}) => async (p: unknown) => { calls.push([n, p]); return { data }; };
     const sheets = {
       spreadsheets: { values: {
-        get: rec("get", { values: [["m1", 46346, 11, "Jum–Min", "Brando", "tiktok"]] }),
+        get: rec("get", { values: rows }),
         update: rec("update"), append: rec("append"), clear: rec("clear"), batchUpdate: rec("batchUpdate"),
       } },
     } as never;
@@ -154,6 +216,26 @@ describe("apply dispatch", () => {
     await gw(sheets).apply({ type: "upsertKredit", rows: [kredit({ jam: 12 })] });
     expect(calls.map((c) => c[0])).toEqual(["get", "update"]);
     expect(calls[1]?.[1]).toMatchObject({ range: "'Data Kredit'!A2", valueInputOption: "RAW" });
+  });
+  it("upsertKredit: baris tertulis dan rentang clear tepat", async () => {
+    const lama = toKreditSheetRows([kredit({ jam: 11, omzet: 1 }), kredit({ jam: 12, omzet: 2 }), kredit({ messageId: "m9", omzet: 9 })]);
+    const { sheets, calls } = fakeSheets(lama as unknown[][]);
+    await gw(sheets).apply({ type: "upsertKredit", rows: [kredit({ jam: 12, omzet: 20 })] });
+    expect(calls.map((c) => c[0])).toEqual(["get", "update", "clear"]);
+    expect(calls[0]?.[1]).toMatchObject({ range: "'Data Kredit'!A2:P" });
+    const u = calls[1]?.[1] as { requestBody: { values: unknown[][] } };
+    expect(u.requestBody.values.map((r) => [r[0], r[2], r[6]])).toEqual([["m1", 12, 20], ["m9", 12, 9]]);
+    expect(calls[2]?.[1]).toMatchObject({ range: "'Data Kredit'!A4:P4" });
+  });
+  it("writeTargetHarian: bulan lain dipertahankan, bulan ini diganti, ekor dihapus", async () => {
+    const okt = [46300, "Brando", 5, 0, ""]; // 2026-10-05
+    const nov1 = [46346, "Brando", 1, 0, ""];
+    const nov2 = [46347, "Brando", 1, 0, ""];
+    const { sheets, calls } = fakeSheets([okt, nov1, nov2]);
+    await gw(sheets).apply({ type: "writeTargetHarian", month: "2026-11", rows: [{ tanggal: "2026-11-20", host: "Brando", target: 9, gugur: 0, sebab: "" }] });
+    expect(calls.map((c) => c[0])).toEqual(["get", "update", "clear"]);
+    expect((calls[1]?.[1] as { requestBody: { values: unknown[][] } }).requestBody.values).toEqual([okt, [46346, "Brando", 9, 0, ""]]);
+    expect(calls[2]?.[1]).toMatchObject({ range: "'Target Harian'!A4:E4" });
   });
   it("writeHeartbeat dan appendLog", async () => {
     const { sheets, calls } = fakeSheets();

@@ -47,6 +47,12 @@ describe("verifyWahaHmac", () => {
     expect(verifyWahaHmac(body + " ", hex, "kunci")).toBe(false);
     expect(verifyWahaHmac(body, undefined, "kunci")).toBe(false);
     expect(verifyWahaHmac(body, "zz", "kunci")).toBe(false);
+    expect(verifyWahaHmac(body, hex, "")).toBe(false);
+    expect(verifyWahaHmac(body, hex + "zz", "kunci")).toBe(false);
+    expect(verifyWahaHmac(body, `${hex}00`, "kunci")).toBe(false);
+    expect(verifyWahaHmac(body, hex.toUpperCase(), "kunci")).toBe(true);
+    const kosongHex = createHmac("sha512", "").update(body).digest("hex");
+    expect(verifyWahaHmac(body, kosongHex, "")).toBe(false);
   });
 });
 
@@ -70,6 +76,7 @@ describe("WahaClient", () => {
     expect(calls[0]?.url).toBe("http://waha:3000/api/sendText");
     expect(calls[0]?.init.method).toBe("POST");
     expect((calls[0]?.init.headers as Record<string, string>)["X-Api-Key"]).toBe("RAHASIA");
+    expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ session: "default", chatId: "1@g.us", text: "hai", reply_to: "m1", mentions: ["628@c.us"] });
     await client(f).sendText("1@g.us", "x");
     expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ session: "default", chatId: "1@g.us", text: "x" });
@@ -98,6 +105,29 @@ describe("WahaClient", () => {
     expect(u.pathname).toBe("/api/default/chats/1%40g.us/messages");
     expect(Object.fromEntries(u.searchParams)).toEqual({ limit: "100", downloadMedia: "true", "filter.timestamp.gte": "50", "filter.fromMe": "false" });
     expect(r.map((m) => m.id)).toEqual(["b", "a"]);
+  });
+  it("messagesSince berhalaman sampai halaman < 100 (urutan menurun)", async () => {
+    const msg = (i: number): unknown => ({ id: `m${i}`, timestamp: i, from: "1@g.us", body: String(i) });
+    const p1 = Array.from({ length: 100 }, (_, k) => msg(1100 - k)); // 1100..1001
+    const p2 = [msg(1001), msg(1000), msg(999)];
+    let n = 0;
+    const { f, calls } = fake(() => json(n++ === 0 ? p1 : p2));
+    const r = await client(f).messagesSince("1@g.us", new Date(0));
+    expect(calls).toHaveLength(2);
+    const q2 = new URL(calls[1]?.url ?? "").searchParams;
+    expect(q2.get("filter.timestamp.lte")).toBe("1001");
+    expect(q2.get("filter.timestamp.gte")).toBe("0");
+    expect(r).toHaveLength(102);
+    expect(r[0]?.id).toBe("m999");
+    expect(r.at(-1)?.id).toBe("m1100");
+  });
+  it("messagesSince berhalaman (urutan menaik) memakai gte timestamp terbesar", async () => {
+    const msg = (i: number): unknown => ({ id: `m${i}`, timestamp: i, from: "1@g.us" });
+    let n = 0;
+    const { f, calls } = fake(() => json(n++ === 0 ? Array.from({ length: 100 }, (_, k) => msg(k + 1)) : [msg(100), msg(101)]));
+    const r = await client(f).messagesSince("1@g.us", new Date(0));
+    expect(new URL(calls[1]?.url ?? "").searchParams.get("filter.timestamp.gte")).toBe("100");
+    expect(r).toHaveLength(101);
   });
   it("sessionStatus", async () => {
     const { f, calls } = fake(() => json({ name: "default", status: "WORKING" }));

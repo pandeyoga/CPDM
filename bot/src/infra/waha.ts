@@ -57,11 +57,15 @@ export function parseIncoming(payload: unknown): Incoming | null {
 
 /** Verifikasi X-Webhook-Hmac (HMAC-SHA512 hex dari body mentah). */
 export function verifyWahaHmac(rawBody: Buffer | string, headerHex: string | undefined, key: string): boolean {
-  if (!headerHex) return false;
+  if (!key || !headerHex || !/^[0-9a-f]{128}$/i.test(headerHex)) return false;
   const expected = createHmac("sha512", key).update(rawBody).digest();
-  const given = Buffer.from(headerHex.trim(), "hex");
+  const given = Buffer.from(headerHex, "hex");
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
+
+const TIMEOUT_MS = 30_000;
+const PAGE_SIZE = 100;
+const MAX_PAGES = 50;
 
 export type FetchLike = typeof fetch;
 
@@ -79,7 +83,7 @@ export class WahaClient {
   private async call(method: string, endpoint: string, url: string, body?: unknown): Promise<Response> {
     const headers: Record<string, string> = { "X-Api-Key": this.opts.apiKey };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await this.f(url, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const res = await this.f(url, { method, headers, signal: AbortSignal.timeout(TIMEOUT_MS), ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     if (!res.ok) throw new Error(`WAHA ${method} ${endpoint} gagal: HTTP ${res.status}`);
     return res;
   }
@@ -102,21 +106,39 @@ export class WahaClient {
     return { buf: Buffer.from(await res.arrayBuffer()), mime };
   }
 
+  /**
+   * Menarik halaman 100 pesan sampai satu halaman berisi < 100. Urutan respons dibaca dari timestamp: menurun
+   * (terbaru dulu) → halaman berikut memakai filter.timestamp.lte = timestamp terkecil; menaik → gte = terbesar.
+   * Batas inklusif supaya pesan dengan detik sama tidak hilang; duplikat dibuang menurut id.
+   */
   async messagesSince(chatId: string, since: Date): Promise<Incoming[]> {
     const endpoint = `/api/${this.opts.session}/chats/${chatId}/messages`;
-    const qs = new URLSearchParams({
-      limit: "100",
-      downloadMedia: "true",
-      "filter.timestamp.gte": String(Math.floor(since.getTime() / 1000)),
-      "filter.fromMe": "false",
-    });
-    const url = `${this.base}/api/${encodeURIComponent(this.opts.session)}/chats/${encodeURIComponent(chatId)}/messages?${qs}`;
-    const data: unknown = await (await this.call("GET", endpoint, url)).json();
-    if (!Array.isArray(data)) return [];
-    return data
-      .map(parseIncoming)
-      .filter((m): m is Incoming => m !== null)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime());
+    const dasar = `${this.base}/api/${encodeURIComponent(this.opts.session)}/chats/${encodeURIComponent(chatId)}/messages`;
+    const gte0 = Math.floor(since.getTime() / 1000);
+    const hasil = new Map<string, Incoming>();
+    let gte = gte0;
+    let lte: number | undefined;
+    for (let halaman = 0; halaman < MAX_PAGES; halaman++) {
+      const qs = new URLSearchParams({
+        limit: String(PAGE_SIZE), downloadMedia: "true", "filter.timestamp.gte": String(gte), "filter.fromMe": "false",
+      });
+      if (lte !== undefined) qs.set("filter.timestamp.lte", String(lte));
+      const data: unknown = await (await this.call("GET", endpoint, `${dasar}?${qs}`)).json();
+      if (!Array.isArray(data)) break;
+      const sebelum = hasil.size;
+      for (const m of data) {
+        const p = parseIncoming(m);
+        if (p) hasil.set(p.id, p);
+      }
+      if (data.length < PAGE_SIZE) break;
+      const ts = data.flatMap((m) => (isObj(m) && typeof m.timestamp === "number" ? [m.timestamp] : []));
+      const pertama = ts[0];
+      const terakhir = ts[ts.length - 1];
+      if (pertama === undefined || terakhir === undefined || hasil.size === sebelum) break;
+      if (pertama >= terakhir) lte = Math.min(...ts);
+      else gte = Math.max(...ts);
+    }
+    return [...hasil.values()].sort((a, b) => a.ts.getTime() - b.ts.getTime());
   }
 
   async sessionStatus(): Promise<string> {

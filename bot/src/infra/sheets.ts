@@ -49,53 +49,66 @@ const KEPUTUSAN_KOREKSI = "setujui";
 const KEPUTUSAN_LAIN = "disetujui";
 const FIELDS: readonly CumulativeField[] = ["omzet", "pesanan", "penontonMasuk", "komentar", "keranjang", "impresi", "pengikutBaru", "durasiDetik"];
 
-/* ---------- Pembaca sel ---------- */
+/* ---------- Pembaca sel (ketat: nilai tak valid → undefined, tidak menebak) ---------- */
 
 type Cell = unknown;
+export interface Invalid { tab: string; row: number; reason: string }
+export interface Parsed<T> { value: T; invalid: Invalid[] }
+
 const EPOCH_SHEETS = Date.UTC(1899, 11, 30);
 const text = (c: Cell): string => (c === undefined || c === null ? "" : String(c).trim());
+const blank = (c: Cell): boolean => text(c) === "";
 const serialToDate = (n: number): string => new Date(EPOCH_SHEETS + Math.floor(n) * 86_400_000).toISOString().slice(0, 10);
 
+function validYmd(y: number, m: number, d: number): boolean {
+  if (m < 1 || m > 12 || d < 1) return false;
+  return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
 function toDate(c: Cell): string | undefined {
-  if (typeof c === "number" && c > 0) return serialToDate(c);
+  if (typeof c === "number") return c >= 1 && c < 2_958_466 ? serialToDate(c) : undefined;
   const s = text(c);
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  return m ? `${m[3]}-${m[2]?.padStart(2, "0")}-${m[1]?.padStart(2, "0")}` : undefined;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (iso) return validYmd(Number(iso[1]), Number(iso[2]), Number(iso[3])) ? s : undefined;
+  const id = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (id && validYmd(Number(id[3]), Number(id[2]), Number(id[1]))) return `${id[3]}-${pad2(Number(id[2]))}-${pad2(Number(id[1]))}`;
+  return undefined;
 }
 const pad2 = (n: number): string => String(n).padStart(2, "0");
+/** Jam 00:00–23:59: teks "HH:MM(:SS)" atau pecahan hari [0,1) dari sel waktu. Angka biasa (mis. 9) tidak valid. */
 function toMinutes(c: Cell): number | undefined {
-  if (typeof c === "number") return Math.round((c - Math.floor(c)) * 1440) % 1440;
-  const m = /^(\d{1,2}):(\d{2})/.exec(text(c));
-  return m ? Number(m[1]) * 60 + Number(m[2]) : undefined;
+  if (typeof c === "number") return c >= 0 && c < 1 ? Math.round(c * 1440) % 1440 : undefined;
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(text(c));
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h <= 23 && min <= 59 ? h * 60 + min : undefined;
 }
 function toHM(c: Cell): string | undefined {
   const min = toMinutes(c);
   return min === undefined ? undefined : `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`;
 }
+/** Angka: sel bertipe angka, hasil parseNum, atau ^\d+$ / ^\d+\.\d+$. Selain itu undefined. */
 function toNumber(c: Cell): number | undefined {
-  if (typeof c === "number") return c;
+  if (typeof c === "number") return Number.isFinite(c) ? c : undefined;
   const s = text(c);
-  if (s === "") return undefined;
   const n = parseNum(s);
   if (n) return n.value;
-  const plain = Number(s.replace(",", "."));
-  return Number.isFinite(plain) ? plain : undefined;
+  return /^\d+$|^\d+\.\d+$/.test(s) ? Number(s) : undefined;
 }
 function toMonth(c: Cell): string | undefined {
   const s = text(c);
-  if (/^\d{4}-\d{2}$/.test(s)) return s;
+  const m = /^(\d{4})-(\d{2})$/.exec(s);
+  if (m) return Number(m[2]) >= 1 && Number(m[2]) <= 12 ? s : undefined;
   return toDate(c)?.slice(0, 7);
 }
-/** "No WA" → id WhatsApp "628…@c.us" (0 di depan → 62). */
+/** "No WA" → id WhatsApp "628…@c.us" (0 di depan → 62); 8–15 digit. */
 function toWaId(c: Cell): string | undefined {
   const s = text(c);
-  if (s === "") return undefined;
-  if (s.includes("@")) return s;
+  if (s.includes("@")) return /^\d{8,15}@(c|g)\.us$/.test(s) ? s : undefined;
+  if (!/^[\d\s+\-()]+$/.test(s)) return undefined;
   let d = s.replace(/\D/g, "");
-  if (d === "") return undefined;
   if (d.startsWith("0")) d = `62${d.slice(1)}`;
-  return `${d}@c.us`;
+  return d.length >= 8 && d.length <= 15 ? `${d}@c.us` : undefined;
 }
 const sama = (c: Cell, nilai: string): boolean => text(c).toLowerCase() === nilai;
 const platformOf = (c: Cell): Platform | undefined => {
@@ -105,48 +118,73 @@ const platformOf = (c: Cell): Platform | undefined => {
 
 /* ---------- Pengaturan ---------- */
 
-export function fromSettingsRows(rows: Cell[][]): Settings {
-  const kv = new Map<string, Cell>();
-  for (const r of rows) {
+export function fromSettingsRows(rows: Cell[][]): Parsed<Settings> {
+  const invalid: Invalid[] = [];
+  const bad = (row: number, reason: string): void => void invalid.push({ tab: TAB.pengaturan, row, reason });
+  const kv = new Map<string, { cell: Cell; row: number }>();
+  rows.forEach((r, i) => {
     const key = text(r[0]);
-    if (key !== "") kv.set(key, r[1]);
-  }
+    if (key !== "") kv.set(key, { cell: r[1], row: i + 1 });
+  });
   const k = PENGATURAN_KEYS;
-  const hm = (key: string, bawaan: string): string => toHM(kv.get(key)) ?? bawaan;
-  const angka = (key: string, bawaan: number): number => toNumber(kv.get(key)) ?? bawaan;
+  /** Kosong → bawaan (tanpa laporan); terisi tapi tak valid → bawaan + laporan. */
+  function ambil<T>(key: string, bawaan: T, baca: (c: Cell) => T | undefined): T {
+    const e = kv.get(key);
+    if (!e || blank(e.cell)) return bawaan;
+    const v = baca(e.cell);
+    if (v === undefined) bad(e.row, `${key}: nilai "${text(e.cell)}" tidak valid, memakai bawaan`);
+    return v ?? bawaan;
+  }
+  const bulat = (min: number) => (c: Cell): number | undefined => {
+    const n = toNumber(c);
+    return n !== undefined && Number.isInteger(n) && n >= min ? n : undefined;
+  };
 
   const teamTarget: Record<string, number> = {};
   const hosts: HostConfig[] = [];
-  rows.slice(1).forEach((r, i) => {
-    const bulan = toMonth(r[3]);
-    const target = toNumber(r[4]);
-    if (bulan && target !== undefined) teamTarget[bulan] = target;
-    const nama = text(r[6]);
-    if (nama !== "" && i < MAX_HOST_PENGATURAN) {
-      const host: HostConfig = { name: nama };
-      const waId = toWaId(r[7]);
-      const mulai = toDate(r[8]);
-      const selesai = toDate(r[9]);
-      if (waId) host.waId = waId;
-      if (mulai) host.aktifMulai = mulai;
-      if (selesai) host.aktifSelesai = selesai;
-      hosts.push(host);
+  rows.forEach((r, i) => {
+    if (i === 0) return;
+    const row = i + 1;
+    if (!blank(r[3]) || !blank(r[4])) {
+      const bulan = toMonth(r[3]);
+      const target = toNumber(r[4]);
+      if (bulan && target !== undefined && target >= 0) teamTarget[bulan] = target;
+      else bad(row, `Target bulanan "${text(r[3])}" / "${text(r[4])}" tidak valid`);
     }
+    const nama = text(r[6]);
+    if (nama === "") return;
+    if (hosts.length >= MAX_HOST_PENGATURAN) return bad(row, `Host "${nama}" melebihi batas ${MAX_HOST_PENGATURAN} host`);
+    const host: HostConfig = { name: nama };
+    if (!blank(r[7])) {
+      const waId = toWaId(r[7]);
+      if (waId) host.waId = waId;
+      else bad(row, `No WA host ${nama} tidak valid`);
+    }
+    for (const [idx, prop, label] of [[8, "aktifMulai", "Aktif mulai"], [9, "aktifSelesai", "Aktif selesai"]] as const) {
+      if (blank(r[idx])) continue;
+      const d = toDate(r[idx]);
+      if (d) host[prop] = d;
+      else bad(row, `${label} host ${nama} tidak valid`);
+    }
+    hosts.push(host);
   });
 
-  const jadwal = kv.get(k.jadwalAktif);
+  const jadwal = ambil<boolean>(k.jadwalAktif, false, (c) => (c === true || sama(c, "ya") ? true : c === false || sama(c, "tidak") ? false : undefined));
   return {
-    teamTarget,
-    jadwalAktif: jadwal === true || sama(jadwal, "ya"),
-    liveMulai: hm(k.liveMulai, "09:00"),
-    liveSelesai: hm(k.liveSelesai, "22:00"),
-    jamPagi: hm(k.jamPagi, "08:00"),
-    jamRekap: hm(k.jamRekap, "22:30"),
-    maxGapMenit: angka(k.maxGapMenit, 240),
-    maxPesanPerHari: angka(k.maxPesanPerHari, 6),
-    hosts,
-    ownerWaId: toWaId(kv.get(k.ownerWaId)) ?? "",
-    ownerEmail: text(kv.get(k.ownerEmail)),
+    value: {
+      teamTarget,
+      jadwalAktif: jadwal,
+      liveMulai: ambil(k.liveMulai, "09:00", toHM),
+      liveSelesai: ambil(k.liveSelesai, "22:00", toHM),
+      jamPagi: ambil(k.jamPagi, "08:00", toHM),
+      jamRekap: ambil(k.jamRekap, "22:30", toHM),
+      maxGapMenit: ambil(k.maxGapMenit, 240, bulat(1)),
+      maxPesanPerHari: ambil(k.maxPesanPerHari, 6, bulat(0)),
+      hosts,
+      ownerWaId: ambil(k.ownerWaId, "", toWaId),
+      ownerEmail: text(kv.get(k.ownerEmail)?.cell),
+    },
+    invalid,
   };
 }
 
@@ -176,71 +214,86 @@ export function parseAtribusi(input: string, hosts: Array<{ name: string }>): Ar
 
 /* ---------- Parser tab input owner ---------- */
 
-const dataRows = (rows: Cell[][]): Cell[][] => rows.slice(1);
-
-export function parseKoreksiRows(rows: Cell[][]): Array<{ messageId: string; platform: Platform; field: CumulativeField; value: number }> {
-  const out: Array<{ messageId: string; platform: Platform; field: CumulativeField; value: number }> = [];
-  for (const r of dataRows(rows)) {
-    const platform = platformOf(r[KOREKSI_IDX.platform]);
-    const field = FIELDS.find((f) => f === text(r[KOREKSI_IDX.field]));
-    const value = toNumber(r[KOREKSI_IDX.nilai]);
-    const messageId = text(r[KOREKSI_IDX.messageId]);
-    if (sama(r[KOREKSI_IDX.jenis], "koreksi") && sama(r[KOREKSI_IDX.keputusan], KEPUTUSAN_KOREKSI) && platform && field && value !== undefined && messageId !== "") {
-      out.push({ messageId, platform, field, value });
+/** Jalankan `baca` per baris data (tanpa header); baris kosong dilewati; Error dari `baca` dicatat sebagai invalid. */
+function parseRows<T>(tab: string, rows: Cell[][], baca: (r: Cell[]) => T | null): Parsed<T[]> {
+  const value: T[] = [];
+  const invalid: Invalid[] = [];
+  rows.forEach((r, i) => {
+    if (i === 0 || r.every(blank)) return;
+    try {
+      const v = baca(r);
+      if (v !== null) value.push(v);
+    } catch (e) {
+      invalid.push({ tab, row: i + 1, reason: (e as Error).message });
     }
-  }
-  return out;
+  });
+  return { value, invalid };
+}
+const wajib = <T>(v: T | undefined, alasan: string): T => {
+  if (v === undefined) throw new Error(alasan);
+  return v;
+};
+
+export function parseKoreksiRows(rows: Cell[][]): Parsed<Array<{ messageId: string; platform: Platform; field: CumulativeField; value: number }>> {
+  return parseRows(TAB.koreksi, rows, (r) => {
+    if (!sama(r[KOREKSI_IDX.jenis], "koreksi") || !sama(r[KOREKSI_IDX.keputusan], KEPUTUSAN_KOREKSI)) return null;
+    const messageId = text(r[KOREKSI_IDX.messageId]);
+    if (messageId === "") throw new Error("Koreksi disetujui tanpa ID Pesan");
+    const platform = wajib(platformOf(r[KOREKSI_IDX.platform]), `Platform "${text(r[KOREKSI_IDX.platform])}" tidak valid`);
+    const fieldText = text(r[KOREKSI_IDX.field]).toLowerCase();
+    const field = wajib(FIELDS.find((f) => f.toLowerCase() === fieldText), `Field "${text(r[KOREKSI_IDX.field])}" tidak dikenal`);
+    const value = wajib(toNumber(r[KOREKSI_IDX.nilai]), `Nilai "${text(r[KOREKSI_IDX.nilai])}" bukan angka valid`);
+    return { messageId, platform, field, value };
+  });
 }
 
 /** Kunci `${messageId}|${platform}` (ledger R15). */
-export function parseAtribusiRows(rows: Cell[][], hosts: Array<{ name: string }>): Map<string, Array<{ host: string; share: number }>> {
-  const out = new Map<string, Array<{ host: string; share: number }>>();
-  for (const r of dataRows(rows)) {
-    const platform = platformOf(r[KOREKSI_IDX.platform]);
+export function parseAtribusiRows(rows: Cell[][], hosts: Array<{ name: string }>): Parsed<Map<string, Array<{ host: string; share: number }>>> {
+  const p = parseRows(TAB.koreksi, rows, (r) => {
+    if (!sama(r[KOREKSI_IDX.jenis], "atribusi") || !sama(r[KOREKSI_IDX.keputusan], KEPUTUSAN_KOREKSI)) return null;
     const messageId = text(r[KOREKSI_IDX.messageId]);
-    if (!sama(r[KOREKSI_IDX.jenis], "atribusi") || !sama(r[KOREKSI_IDX.keputusan], KEPUTUSAN_KOREKSI) || !platform || messageId === "") continue;
-    const parsed = parseAtribusi(text(r[KOREKSI_IDX.atribusi]), hosts);
-    if (parsed) out.set(`${messageId}|${platform}`, parsed);
-  }
-  return out;
+    const platform = platformOf(r[KOREKSI_IDX.platform]);
+    if (messageId === "" || !platform) throw new Error("Atribusi disetujui tanpa ID Pesan/Platform valid");
+    const split = wajib(parseAtribusi(text(r[KOREKSI_IDX.atribusi]), hosts) ?? undefined, `Atribusi "${text(r[KOREKSI_IDX.atribusi])}" tidak valid`);
+    return { key: `${messageId}|${platform}`, split };
+  });
+  return { value: new Map(p.value.map((e) => [e.key, e.split])), invalid: p.invalid };
 }
 
-export function parseKehadiranRows(rows: Cell[][]): Array<{ host: string; date: string }> {
-  const out: Array<{ host: string; date: string }> = [];
-  for (const r of dataRows(rows)) {
-    const date = toDate(r[0]);
+export function parseKehadiranRows(rows: Cell[][]): Parsed<Array<{ host: string; date: string }>> {
+  return parseRows(TAB.kehadiran, rows, (r) => {
+    if (!sama(r[5], KEPUTUSAN_LAIN)) return null;
+    const date = wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`);
+    const host = wajib(text(r[1]) === "" ? undefined : text(r[1]), "Host kosong");
     const jenis = text(r[2]).toLowerCase();
-    if (date && text(r[1]) !== "" && ["sakit", "izin", "cuti"].includes(jenis) && sama(r[5], KEPUTUSAN_LAIN)) out.push({ host: text(r[1]), date });
-  }
-  return out;
+    if (!["sakit", "izin", "cuti", "telat"].includes(jenis)) throw new Error(`Jenis "${text(r[2])}" tidak dikenal`);
+    return jenis === "telat" ? null : { host, date };
+  });
 }
 
-export function parseGangguanRows(rows: Cell[][]): Array<{ host: string; date: string; menit: number }> {
-  const out: Array<{ host: string; date: string; menit: number }> = [];
-  for (const r of dataRows(rows)) {
-    const date = toDate(r[0]);
-    const mulai = toMinutes(r[2]);
-    const selesai = toMinutes(r[3]);
-    if (!date || text(r[1]) === "" || mulai === undefined || selesai === undefined || !sama(r[6], KEPUTUSAN_LAIN)) continue;
-    const menit = selesai - mulai;
-    if (menit > 0) out.push({ host: text(r[1]), date, menit });
-  }
-  return out;
+export function parseGangguanRows(rows: Cell[][]): Parsed<Array<{ host: string; date: string; menit: number }>> {
+  return parseRows(TAB.gangguan, rows, (r) => {
+    if (!sama(r[6], KEPUTUSAN_LAIN)) return null;
+    const date = wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`);
+    const host = wajib(text(r[1]) === "" ? undefined : text(r[1]), "Host kosong");
+    const mulai = wajib(toMinutes(r[2]), `Mulai "${text(r[2])}" tidak valid`);
+    const selesai = wajib(toMinutes(r[3]), `Selesai "${text(r[3])}" tidak valid`);
+    if (selesai <= mulai) throw new Error("Selesai harus setelah Mulai");
+    return { host, date, menit: selesai - mulai };
+  });
 }
 
-export function parseKalenderRows(rows: Cell[][]): string[] {
-  return dataRows(rows).flatMap((r) => toDate(r[0]) ?? []);
+export function parseKalenderRows(rows: Cell[][]): Parsed<string[]> {
+  return parseRows(TAB.kalender, rows, (r) => wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`));
 }
 
-export function parseJadwalRows(rows: Cell[][]): Array<{ date: string; host: string; mulai: string; selesai: string }> {
-  const out: Array<{ date: string; host: string; mulai: string; selesai: string }> = [];
-  for (const r of dataRows(rows)) {
-    const date = toDate(r[0]);
-    const mulai = toHM(r[2]);
-    const selesai = toHM(r[3]);
-    if (date && text(r[1]) !== "" && mulai && selesai) out.push({ date, host: text(r[1]), mulai, selesai });
-  }
-  return out;
+export function parseJadwalRows(rows: Cell[][]): Parsed<Array<{ date: string; host: string; mulai: string; selesai: string }>> {
+  return parseRows(TAB.jadwal, rows, (r) => ({
+    date: wajib(toDate(r[0]), `Tanggal "${text(r[0])}" tidak valid`),
+    host: wajib(text(r[1]) === "" ? undefined : text(r[1]), "Host kosong"),
+    mulai: wajib(toHM(r[2]), `Mulai "${text(r[2])}" tidak valid`),
+    selesai: wajib(toHM(r[3]), `Selesai "${text(r[3])}" tidak valid`),
+  }));
 }
 
 /* ---------- Pemetaan tulis ---------- */
@@ -336,6 +389,19 @@ const koreksiCells = (r: KoreksiRow): NilaiSel[] => [
   r.platform ?? "", r.jenis, r.field ?? "", r.value ?? "",
 ];
 
+/** Target Harian: baris bulan lain dipertahankan, baris bulan itu diganti seluruhnya. */
+export function mergeTargetHarian(existing: NilaiSel[][], month: string, rows: TargetHarianRow[]): NilaiSel[][] {
+  const lain = existing.filter((r) => typeof r[0] !== "number" || serialToDate(r[0]).slice(0, 7) !== month);
+  return [...lain, ...toTargetHarianRows(rows)];
+}
+
+/** Rentang ekor yang harus dihapus setelah tabel (data mulai baris 2) menyusut dari oldLen ke newLen baris; null bila tak perlu. */
+export function tailClearRange(tab: string, width: number, newLen: number, oldLen: number): string | null {
+  if (oldLen <= newLen) return null;
+  const last = colLetter(width - 1);
+  return `'${tab}'!A${newLen + 2}:${last}${oldLen + 1}`;
+}
+
 const colLetter = (n: number): string => String.fromCharCode(65 + n);
 const q = (tab: string): string => `'${tab}'`;
 
@@ -348,7 +414,11 @@ export class SheetsGateway {
   private readonly sheets: SheetsClient;
   private readonly drive: DriveClient;
 
-  constructor(private readonly cfg: GatewayConfig, clients?: { sheets: SheetsClient; drive: DriveClient }) {
+  constructor(
+    private readonly cfg: GatewayConfig,
+    clients?: { sheets: SheetsClient; drive: DriveClient },
+    private readonly onInvalid?: (items: Invalid[]) => void,
+  ) {
     if (clients) {
       this.sheets = clients.sheets;
       this.drive = clients.drive;
@@ -372,14 +442,20 @@ export class SheetsGateway {
     return (res.data.values ?? []) as Cell[][];
   }
 
-  readSettings = async (): Promise<Settings> => fromSettingsRows(await this.read(`${TAB.pengaturan}!${PENGATURAN_READ}`));
-  readKoreksiKeputusan = async () => parseKoreksiRows(await this.read(`${q(TAB.koreksi)}!A:L`));
-  readAtribusi = async () => parseAtribusiRows(await this.read(`${q(TAB.koreksi)}!A:L`), (await this.readSettings()).hosts);
-  readKehadiran = async () => parseKehadiranRows(await this.read(`${TAB.kehadiran}!A:F`));
-  readGangguan = async () => parseGangguanRows(await this.read(`${TAB.gangguan}!A:G`));
-  readKalenderLive = async () => parseKalenderRows(await this.read(`${q(TAB.kalender)}!A:B`));
+  /** Baris input owner yang tak valid dilaporkan ke onInvalid (caller menulis Log Bot / memberi tahu owner). */
+  private lapor<T>(p: Parsed<T>): T {
+    if (p.invalid.length > 0) this.onInvalid?.(p.invalid);
+    return p.value;
+  }
+
+  readSettings = async (): Promise<Settings> => this.lapor(fromSettingsRows(await this.read(`${TAB.pengaturan}!${PENGATURAN_READ}`)));
+  readKoreksiKeputusan = async () => this.lapor(parseKoreksiRows(await this.read(`${q(TAB.koreksi)}!A:L`)));
+  readAtribusi = async () => this.lapor(parseAtribusiRows(await this.read(`${q(TAB.koreksi)}!A:L`), (await this.readSettings()).hosts));
+  readKehadiran = async () => this.lapor(parseKehadiranRows(await this.read(`${TAB.kehadiran}!A:F`)));
+  readGangguan = async () => this.lapor(parseGangguanRows(await this.read(`${TAB.gangguan}!A:G`)));
+  readKalenderLive = async () => this.lapor(parseKalenderRows(await this.read(`${q(TAB.kalender)}!A:B`)));
   readJadwal = async () =>
-    parseJadwalRows(await this.read(`${q(TAB.jadwal)}!A:D`, this.cfg.JADWAL_SPREADSHEET_ID ?? this.id));
+    this.lapor(parseJadwalRows(await this.read(`${q(TAB.jadwal)}!A:D`, this.cfg.JADWAL_SPREADSHEET_ID ?? this.id)));
 
   /** Realisasi bulan ini per host dari tab Kontrol (kolom B), untuk pengecekan silang. */
   async readKontrol(): Promise<Record<string, number>> {
@@ -392,6 +468,10 @@ export class SheetsGateway {
     return out;
   }
 
+  /**
+   * Unggah bukti ke folder BUKTI_FOLDER_ID. Dengan scope drive.file, folder tujuan harus dibuat oleh OAuth client
+   * yang sama (setup-sheet membuatnya di Task 13); folder buatan tangan tidak bisa ditulisi.
+   */
   async uploadBukti(buf: Buffer, name: string): Promise<string> {
     const mimeType = /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : "image/jpeg";
     const res = await this.drive.files.create({
@@ -421,10 +501,7 @@ export class SheetsGateway {
         return this.put(`${TAB.heartbeat}!A2:B2`, [[op.at.toISOString(), op.waStatus]]);
       case "upsertKredit": return this.rewriteTable(TAB.dataKredit, KREDIT_COLUMNS.length, (old) => mergeKredit(old, op.rows));
       case "writeTargetHarian":
-        return this.rewriteTable(TAB.targetHarian, TARGET_HARIAN_COLUMNS.length, (old) => [
-          ...old.filter((r) => typeof r[0] !== "number" || serialToDate(r[0]).slice(0, 7) !== op.month),
-          ...toTargetHarianRows(op.rows),
-        ]);
+        return this.rewriteTable(TAB.targetHarian, TARGET_HARIAN_COLUMNS.length, (old) => mergeTargetHarian(old, op.month, op.rows));
       case "writeKondisi": return this.writeKondisi(op.rows);
     }
   }
@@ -449,11 +526,8 @@ export class SheetsGateway {
     const old = (await this.read(`${q(tab)}!A2:${last}`)) as NilaiSel[][];
     const next = change(old);
     if (next.length > 0) await this.put(`${q(tab)}!A2`, next);
-    if (old.length > next.length) {
-      await this.sheets.spreadsheets.values.clear({
-        spreadsheetId: this.id, range: `${q(tab)}!A${next.length + 2}:${last}${old.length + 1}`,
-      });
-    }
+    const tail = tailClearRange(tab, width, next.length, old.length);
+    if (tail) await this.sheets.spreadsheets.values.clear({ spreadsheetId: this.id, range: tail });
   }
 
   private async writeKondisi(rows: KondisiRow[]): Promise<void> {
