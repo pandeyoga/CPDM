@@ -22,6 +22,8 @@ describe("parseNum", () => {
     expect(parseNum("abc")).toBeNull();
     expect(parseNum("Rp")).toBeNull();
     expect(parseNum("1.2.x")).toBeNull();
+    expect(parseNum("1,317")).toBeNull();
+    expect(parseNum("Rp1,317")).toBeNull();
   });
 });
 
@@ -35,6 +37,9 @@ describe("parseDurasi", () => {
     expect(parseDurasi("")).toBeNull();
     expect(parseDurasi("abc")).toBeNull();
     expect(parseDurasi("1:2:3:4")).toBeNull();
+    expect(parseDurasi("12:99")).toBeNull();
+    expect(parseDurasi("00:60")).toBeNull();
+    expect(parseDurasi("01:60:00")).toBeNull();
     expect(parseDurasi("11:xx:32")).toBeNull();
   });
 });

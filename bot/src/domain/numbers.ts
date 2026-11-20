@@ -10,7 +10,10 @@ export function parseNum(text: string): Num | null {
   const angka = Number(m[1].replace(/\./g, "").replace(",", "."));
   if (!Number.isFinite(angka)) return null;
   const akhiran = m[2];
-  if (akhiran === undefined) return { value: angka, rounded: false };
+  if (akhiran === undefined) {
+    // Tanpa akhiran angka harus bulat; "1,317" ambigu (format Inggris) -> null.
+    return Number.isInteger(angka) ? { value: angka, rounded: false } : null;
+  }
   return { value: Math.round(angka * (KALI[akhiran] ?? 1)), rounded: true };
 }
 
@@ -18,5 +21,6 @@ export function parseDurasi(text: string): number | null {
   const bagian = text.trim().split(":");
   if (bagian.length < 2 || bagian.length > 3) return null;
   if (!bagian.every((p) => /^\d{1,2}$/.test(p))) return null;
+  if (bagian.slice(1).some((p) => Number(p) > 59)) return null;
   return bagian.reduce((acc, p) => acc * 60 + Number(p), 0);
 }
