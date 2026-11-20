@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleMessage, retryPendingExtract, type HandleDeps } from "../src/app/handleMessage.js";
+import { handleMessage, retryPending, type HandleDeps } from "../src/app/handleMessage.js";
 import { buildLedger } from "../src/domain/ledger.js";
 import {
   msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat,
@@ -66,7 +66,8 @@ function setup() {
   const db = openDb(dbPath);
   dbs.push(db);
   const sent: Sent[] = [];
-  const gagal = { kirim: false, unduh: false };
+  const gagal = { kirim: false, unduh: false, unduhMacet: false };
+  const unduhan = { n: 0 };
   let n = 0;
   const waha = {
     async sendText(chatId: string, text: string, replyTo?: string, mentions?: string[]) {
@@ -77,6 +78,8 @@ function setup() {
       return { id };
     },
     async download(url: string) {
+      unduhan.n++;
+      if (gagal.unduhMacet) return new Promise<never>(() => {}); // proses "mati" saat menunggu unduhan
       if (gagal.unduh) throw new Error("WAHA GET /api/files gagal: HTTP 502");
       return { buf: Buffer.from(`gambar ${url}`), mime: "image/jpeg" };
     },
@@ -98,7 +101,7 @@ function setup() {
   const ops = (): OutboxOp[] => db.outbox.next(100).map((i) => i.op);
   const terakhir = (): Sent => sent[sent.length - 1]!;
   const bukti = (m: Incoming): string => join(dir, "bukti", `${m.id}.jpg`);
-  return { dir, dbPath, db, sent, gagal, hasil, extractor, deps, maju, ops, terakhir, bukti };
+  return { dir, dbPath, db, sent, gagal, unduhan, hasil, extractor, deps, maju, ops, terakhir, bukti };
 }
 
 /** Sheets palsu: SheetsGateway asli dengan klien googleapis palsu; antrean di-flush lewat apply(). */
@@ -203,19 +206,19 @@ describe("handleMessage: gambar", () => {
     expect(log).toHaveBeenCalledOnce();
 
     // Belum 5 menit: belum diambil ulang.
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(t.extractor.calls).toBe(1);
 
     // Masih gagal: tetap di antrean, tidak ada pesan baru.
     t.maju(6);
     t.hasil.push(new Error("529 overloaded"));
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(t.extractor.calls).toBe(2);
     expect(t.db.pendingExtract.all()).toHaveLength(1);
     expect(t.sent).toHaveLength(1);
 
     t.hasil.push(ok(shopee(1_317_034)));
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(t.db.pendingExtract.all()).toEqual([]);
     expect(t.db.reports("2026-11")).toEqual([expect.objectContaining({ messageId: m.id, host: "Brando", receivedAt: m.ts })]);
     expect(t.terakhir()).toMatchObject({ replyTo: m.id });
@@ -565,15 +568,15 @@ describe("handleMessage: ketahanan (fix round 1)", () => {
     const deps2: HandleDeps = { ...t.deps, db: db2 };
     t.maju(2);
     await baru.handleMessage({ ...m }, deps2); // catch-up mengirim ulang pesan → diabaikan markMessage
-    await baru.retryPendingExtract(deps2); // baru 2 menit → belum diambil
+    await baru.retryPending(deps2); // baru 2 menit → belum diambil
     expect(t.extractor.calls).toBe(1);
 
     t.maju(4);
-    await retryPendingExtract(t.deps); // proses lama: masih in-flight → tidak diambil dobel
+    await retryPending(t.deps); // proses lama: masih in-flight → tidak diambil dobel
     expect(t.extractor.calls).toBe(1);
 
     t.hasil.push(ok(shopee(1_317_034)));
-    await baru.retryPendingExtract(deps2);
+    await baru.retryPending(deps2);
     expect(t.extractor.calls).toBe(2);
     expect(db2.pendingExtract.all()).toEqual([]);
     expect(db2.reports("2026-11")).toEqual([expect.objectContaining({ messageId: m.id, host: "Brando", receivedAt: m.ts })]);
@@ -595,7 +598,7 @@ describe("handleMessage: ketahanan (fix round 1)", () => {
     t.gagal.unduh = false;
     t.maju(6);
     t.hasil.push(ok(shopee(1_317_034)));
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(t.db.pendingExtract.all()).toEqual([]);
     expect(existsSync(t.bukti(m))).toBe(true);
     expect(t.terakhir().text).toContain("Shopee +Rp1.317.034");
@@ -610,7 +613,7 @@ describe("handleMessage: ketahanan (fix round 1)", () => {
     rmSync(t.bukti(m));
     t.maju(6);
     t.hasil.push(ok(shopee(1_317_034)));
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(existsSync(t.bukti(m))).toBe(true);
     expect(t.db.reports("2026-11")).toHaveLength(1);
     expect(t.db.pendingExtract.all()).toEqual([]);
@@ -635,11 +638,12 @@ describe("handleMessage: ketahanan (fix round 1)", () => {
     expect(t.db.pendingCaption.take(tanpaNama.id)).not.toBeNull();
   });
 
-  it("gambar tanpa URL media diabaikan dengan log", async () => {
+  it("gambar tanpa URL media (unduhan WAHA gagal) → minta kirim ulang, dengan log", async () => {
     const t = setup();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(handleMessage(img("Brando", jam("10:00"), { mediaUrl: undefined }), t.deps)).resolves.toBeUndefined();
-    expect(t.sent).toEqual([]);
+    const m = img("Brando", jam("10:00"), { mediaUrl: undefined });
+    await expect(handleMessage(m, t.deps)).resolves.toBeUndefined();
+    expect(t.sent).toEqual([expect.objectContaining({ text: msgKirimUlang("ditolak"), replyTo: m.id })]);
     expect(t.db.pendingExtract.all()).toEqual([]);
     expect(t.extractor.calls).toBe(0);
     expect(log).toHaveBeenCalledOnce();
@@ -650,9 +654,78 @@ describe("handleMessage: ketahanan (fix round 1)", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     t.db.pendingExtract.put("hilang", "", "");
     t.maju(6);
-    await retryPendingExtract(t.deps);
+    await retryPending(t.deps);
     expect(t.db.pendingExtract.all()).toEqual([]);
     expect(t.extractor.calls).toBe(0);
     expect(log).toHaveBeenCalledOnce();
+  });
+});
+
+describe("handleMessage: fix round 2", () => {
+  it("msgSiapa gagal terkirim → proses ulang (≥5 menit) bertanya lagi; balasan nama menyelesaikannya", async () => {
+    const t = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.gagal.kirim = true;
+    const m = img("", jam("10:00"));
+    await handleMessage(m, t.deps);
+    expect(t.sent).toEqual([]);
+    expect(log).toHaveBeenCalled();
+
+    t.gagal.kirim = false;
+    await retryPending(t.deps); // belum 5 menit
+    expect(t.sent).toEqual([]);
+    t.maju(6);
+    await retryPending(t.deps);
+    expect(t.sent).toEqual([expect.objectContaining({ text: msgSiapa(), replyTo: m.id })]);
+    await retryPending(t.deps); // sudah ditanya: tidak ditanya lagi
+    expect(t.sent).toHaveLength(1);
+
+    t.hasil.push(ok(shopee(1_317_034)));
+    await handleMessage(txt("Vanna", jam("10:07"), { replyToId: t.sent[0]!.id }), t.deps);
+    expect(t.db.reports("2026-11")).toEqual([expect.objectContaining({ messageId: m.id, host: "Vanna", receivedAt: m.ts })]);
+    expect(t.db.pendingCaption.all()).toEqual([]);
+    expect(t.db.problemCounts("2026-11")).toEqual({ Vanna: 1 });
+  });
+
+  it("crash saat menunggu unduhan sebelum bertanya → proses baru bertanya setelah 5 menit; proses lama tidak dobel", async () => {
+    const t = setup();
+    t.gagal.unduhMacet = true;
+    const m = img("", jam("10:00"));
+    void handleMessage(m, t.deps);
+    await vi.waitFor(() => expect(t.unduhan.n).toBe(1));
+    t.maju(6);
+    await retryPending(t.deps); // proses lama: masih in-flight
+    expect(t.unduhan.n).toBe(1);
+    expect(t.sent).toEqual([]);
+
+    vi.resetModules();
+    const baru = await import("../src/app/handleMessage.js");
+    const db2 = openDb(t.dbPath);
+    dbs.push(db2);
+    t.gagal.unduhMacet = false;
+    await baru.retryPending({ ...t.deps, db: db2 });
+    expect(t.sent).toEqual([expect.objectContaining({ text: msgSiapa(), replyTo: m.id })]);
+    expect(existsSync(t.bukti(m))).toBe(true);
+  });
+
+  it.each(["", "Brando"])("siaran lewat tengah malam (laporan terakhir 00:30): layar akhir dipasang sesudah 00:30, caption %j", async (caption) => {
+    const t = setup();
+    t.hasil.push(ok(shopee(800_000)), ok(shopee(1_000_000)), ok(shopee(300_000)));
+    await handleMessage(img("Brando", jakartaDateTime("2026-11-19", "23:00")), t.deps);
+    const terakhirLama = img("Brando", jam("00:30"));
+    await handleMessage(terakhirLama, t.deps);
+    await handleMessage(img("Vanna", jam("09:00")), t.deps);
+    const minta = t.terakhir();
+    expect(minta.text).toBe(msgMintaRiwayat(settings.hosts[0]!, "shopee"));
+
+    t.hasil.push(ok(shopee(1_100_000, { screen: "akhir" })));
+    const akhir = img(caption, jam("09:20"), { replyToId: minta.id });
+    await handleMessage(akhir, t.deps);
+    expect(t.db.reports("2026-11").find((x) => x.messageId === akhir.id)).toMatchObject({
+      host: "Brando", isMati: true, effectiveAt: new Date(terakhirLama.ts.getTime() + 1000),
+    });
+    expect(t.terakhir().text).toContain("Brando · Shopee +Rp100.000");
+    const entries = buildLedger(t.db.reports("2026-11"), { maxGapMenit: 240, liveMulai: "09:00" });
+    expect(entries.reduce((a, e) => a + (e.credit.omzet ?? 0), 0)).toBe(1_400_000);
   });
 });

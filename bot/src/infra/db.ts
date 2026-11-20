@@ -14,6 +14,7 @@ export interface Db {
   pendingCaption: {
     put(msgId: string, imageRef: string, caption: string): void;
     take(msgId: string): { msgId: string; imageRef: string; caption: string } | null;
+    all(): { msgId: string; imageRef: string; caption: string }[];
   };
   pendingExtract: {
     put(msgId: string, imagePath: string, caption: string): void;
@@ -78,6 +79,7 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
     capPut: db.prepare("INSERT OR REPLACE INTO pending_caption (msg_id, image_ref, caption) VALUES (?, ?, ?)"),
     capGet: db.prepare("SELECT msg_id, image_ref, caption FROM pending_caption WHERE msg_id = ?"),
     capDel: db.prepare("DELETE FROM pending_caption WHERE msg_id = ?"),
+    capAll: db.prepare("SELECT msg_id, image_ref, caption FROM pending_caption ORDER BY rowid"),
     exPut: db.prepare("INSERT OR REPLACE INTO pending_extract (msg_id, image_path, caption) VALUES (?, ?, ?)"),
     exAll: db.prepare("SELECT msg_id, image_path, caption FROM pending_extract ORDER BY seq"),
     exDel: db.prepare("DELETE FROM pending_extract WHERE msg_id = ?"),
@@ -135,6 +137,10 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
         if (!row) return null;
         q.capDel.run(msgId);
         return { msgId: row.msg_id, imageRef: row.image_ref, caption: row.caption };
+      },
+      all() {
+        return (q.capAll.all() as { msg_id: string; image_ref: string; caption: string }[])
+          .map((r) => ({ msgId: r.msg_id, imageRef: r.image_ref, caption: r.caption }));
       },
     },
     pendingExtract: {

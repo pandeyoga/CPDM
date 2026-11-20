@@ -83,6 +83,18 @@ describe("db", () => {
     expect(db.pendingCaption.take("zzz")).toBeNull();
   });
 
+  it("pendingCaption.all urut masuk; take mengeluarkan", () => {
+    const db = open();
+    db.pendingCaption.put("m2", "url-2", "");
+    db.pendingCaption.put("m1", "url-1", "Brando Vanna");
+    expect(db.pendingCaption.all()).toEqual([
+      { msgId: "m2", imageRef: "url-2", caption: "" },
+      { msgId: "m1", imageRef: "url-1", caption: "Brando Vanna" },
+    ]);
+    db.pendingCaption.take("m2");
+    expect(db.pendingCaption.all().map((p) => p.msgId)).toEqual(["m1"]);
+  });
+
   it("pendingExtract put/all/done", () => {
     const db = open();
     db.pendingExtract.put("m1", "/p/1.jpg", "c1");

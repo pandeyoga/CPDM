@@ -18,9 +18,10 @@ import type { Incoming, WahaClient } from "../infra/waha.js";
  * Orkestrasi satu pesan grup. Semua tulisan ke Sheets lewat db.outbox (tidak butuh gateway Sheets di sini).
  * Pesan bot yang balasannya penting dilacak di kv menurut id pesan terkirim (R35):
  *   receipt:<id> → messageId laporan (juga dipasang untuk id foto asli), siapa:<id> → messageId gambar tertunda,
- *   riwayat:<id> → {platform, host, beforeIso, afterIso}.
+ *   riwayat:<id> → {platform, host, beforeIso, afterIso, beforeDate, afterDate}.
  * Gambar tidak pernah hilang setelah markMessage: konteksnya (kv gambar:<messageId>) dan antrean pendingExtract
- * ditulis sebelum unduh/ekstraksi dan baru dilepas pada hasil akhir (tersimpan atau ditolak).
+ * (atau pendingCaption) ditulis sebelum unduh/ekstraksi dan baru dilepas pada hasil akhir (tersimpan atau ditolak).
+ * Pertanyaan "siapa" yang belum terkirim (gagal kirim, atau proses mati sebelum bertanya) diulang oleh retryPending.
  */
 
 export interface HandleDeps {
@@ -29,7 +30,7 @@ export interface HandleDeps {
   waha: Pick<WahaClient, "sendText" | "download">;
   extractor: Extractor;
   settings: Settings;
-  /** Jam proses (bukan jam pesan); dipakai untuk umur antrean ekstraksi. */
+  /** Jam proses (bukan jam pesan); dipakai untuk umur item tertunda. */
   now: () => Date;
   /** Bukti disimpan di <dataDir>/bukti/<messageId>.<ext> sebelum diunggah lewat antrean (R36). */
   dataDir: string;
@@ -40,23 +41,26 @@ export type UploadBuktiOp = { type: "uploadBukti"; messageId: string; path: stri
 
 export const KV_GANGGUAN_AKTIF = "gangguanAktif";
 const SUMBER = "Grup WA";
-/** Item pendingExtract baru diambil ulang setelah selama ini (yang lebih muda mungkin masih diproses). */
+/** Item tertunda baru diambil ulang setelah selama ini (yang lebih muda mungkin masih diproses). */
 const PROSES_ULANG_SETELAH_MS = 5 * 60_000;
 
-/** Gambar yang sedang diekstraksi di proses ini; retryPendingExtract tidak mengambilnya dobel. */
+/** Gambar yang sedang ditangani (ekstraksi atau pertanyaan siapa) di proses ini; retryPending tidak mengambilnya dobel. */
 const sedangDiproses = new Set<string>();
 
 interface Gambar {
   messageId: string; receivedAt: string; caption: string; mediaUrl: string;
   /** Berkas lokal; "" sampai unduhan berhasil (proses ulang mengunduh lagi dari mediaUrl). */
   path: string; mime: string;
-  /** Jam proses saat masuk antrean ekstraksi. */
+  /** Jam proses saat gambar mulai tertunda. */
   enqueuedAt: string;
+  /** Hanya untuk gambar menunggu nama host: false sampai pertanyaan "siapa" terkirim dan id-nya terlacak. */
+  ditanya?: boolean;
   /** Calon layar akhir dari riwayat live: waktu efektif, platform yang diminta, dan kunci kv permintaannya. */
   effectiveAt?: string; platform?: Platform; riwayatKey?: string;
 }
 type GambarSiap = Gambar & { host: string; isMati: boolean };
-interface Riwayat { platform: Platform; host: string; beforeIso: string; afterIso?: string }
+/** before = laporan pertama siaran baru, after = laporan terakhir siaran lama; *Date = tanggal entri ledger-nya. */
+interface Riwayat { platform: Platform; host: string; beforeIso: string; beforeDate?: string; afterIso?: string; afterDate?: string }
 interface GangguanAktif { tanggal: string; mulai: string; host: string; alasan: string; scope: Platform | "semua" }
 
 export async function handleMessage(m: Incoming, deps: HandleDeps): Promise<void> {
@@ -69,20 +73,25 @@ export async function handleMessage(m: Incoming, deps: HandleDeps): Promise<void
 }
 
 /**
- * Proses ulang antrean pendingExtract (dipanggil penjadwal). Item yang sedang diproses atau lebih muda dari
- * 5 menit dilewati; yang masih gagal tetap di antrean, tanpa pesan baru.
+ * Proses ulang gambar tertunda (dipanggil penjadwal tiap 5 menit): ekstraksi yang gagal (tanpa pesan baru) dan
+ * pertanyaan "siapa" yang belum terkirim. Item yang sedang ditangani atau lebih muda dari 5 menit dilewati.
  */
-export async function retryPendingExtract(deps: HandleDeps): Promise<void> {
+export async function retryPending(deps: HandleDeps): Promise<void> {
+  const { db } = deps;
   const batas = deps.now().getTime() - PROSES_ULANG_SETELAH_MS;
-  for (const p of deps.db.pendingExtract.all()) {
-    const g = bacaJson<GambarSiap>(deps.db, `gambar:${p.msgId}`);
+  const cukupLama = (g: Gambar): boolean => !(Date.parse(g.enqueuedAt) > batas);
+  for (const p of db.pendingExtract.all()) {
+    const g = bacaJson<GambarSiap>(db, `gambar:${p.msgId}`);
     if (!g || typeof g.host !== "string") {
       console.error(`handleMessage: antrean ekstraksi ${p.msgId} dibuang (konteks gambar hilang)`);
-      deps.db.pendingExtract.done(p.msgId);
+      db.pendingExtract.done(p.msgId);
       continue;
     }
-    if (Date.parse(g.enqueuedAt) > batas) continue;
-    await prosesGambar(g, deps, true);
+    if (cukupLama(g)) await prosesGambar(g, deps, true);
+  }
+  for (const p of db.pendingCaption.all()) {
+    const g = bacaJson<Gambar & { host?: string }>(db, `gambar:${p.msgId}`);
+    if (g && g.host === undefined && g.ditanya === false && cukupLama(g)) await eksklusif(g.messageId, () => tanyaSiapa(g, deps));
   }
 }
 
@@ -90,7 +99,9 @@ export async function retryPendingExtract(deps: HandleDeps): Promise<void> {
 
 async function terimaGambar(m: Incoming, deps: HandleDeps): Promise<void> {
   if (!m.mediaUrl) {
-    console.error(`handleMessage: gambar ${m.id} tanpa URL media, diabaikan`);
+    // WAHA mengirim media.error tanpa url bila unduhannya sendiri gagal.
+    console.error(`handleMessage: gambar ${m.id} tanpa URL media, diminta kirim ulang`);
+    await kirim(deps, msgKirimUlang("ditolak"), m.id);
     return;
   }
   const g: Gambar = {
@@ -107,37 +118,45 @@ async function terimaGambar(m: Incoming, deps: HandleDeps): Promise<void> {
     return antrekanDanProses({ ...g, host: riwayat.host, isMati: true, platform: riwayat.platform, riwayatKey, effectiveAt }, deps);
   }
   if ("host" in cocok) return antrekanDanProses({ ...g, host: cocok.host, isMati: cocok.isMati }, deps);
-  await tanyaSiapa(g, deps);
+  await eksklusif(g.messageId, () => tanyaSiapa(g, deps));
 }
 
 /**
- * Layar akhir riwayat: 1 detik sebelum laporan pertama siaran baru. Bila itu jatuh di tanggal lain dari laporan
- * terakhir siaran lama (siaran kemarin), dipasang 1 detik sesudah laporan terakhir itu; kalau tidak, ledger
- * menganggapnya siaran baru (ganti hari + jeda) dan mengkreditkan seluruh siaran lama sekali lagi.
+ * Layar akhir riwayat: 1 detik sebelum laporan pertama siaran baru. Bila tanggal entri ledger siaran lama
+ * (laporan sebelum 06:00 ikut hari sebelumnya) berbeda dari siaran baru, dipasang 1 detik sesudah laporan
+ * terakhir siaran lama; kalau tidak, ledger menganggapnya siaran baru (ganti hari + jeda) dan mengkreditkan
+ * seluruh siaran lama sekali lagi.
  */
 function waktuLayarAkhir(r: Riwayat): Date {
-  const sebelumBaru = new Date(Date.parse(r.beforeIso) - 1000);
-  if (r.afterIso === undefined) return sebelumBaru;
-  const lama = new Date(r.afterIso);
-  return toJakartaDate(sebelumBaru) === toJakartaDate(lama) ? sebelumBaru : new Date(lama.getTime() + 1000);
+  if (r.afterIso !== undefined && r.afterDate !== r.beforeDate) return new Date(Date.parse(r.afterIso) + 1000);
+  return new Date(Date.parse(r.beforeIso) - 1000);
 }
 
-/** Caption tanpa satu host: simpan tertunda, unduh segera (URL media WAHA kedaluwarsa), lalu tanya. */
+/**
+ * Caption tanpa satu host: simpan tertunda (ditanya=false), unduh segera (URL media WAHA kedaluwarsa), lalu
+ * tanya. ditanya=true hanya setelah pertanyaan terkirim dan terlacak; selain itu retryPending bertanya lagi.
+ */
 async function tanyaSiapa(g: Gambar, deps: HandleDeps): Promise<void> {
   const { db } = deps;
+  g = { ...g, ditanya: false };
   simpanKonteks(db, g);
   db.pendingCaption.put(g.messageId, g.mediaUrl, g.caption);
   db.logProblem(g.messageId, null, toJakartaDate(new Date(g.receivedAt)), "caption");
   if (!adaBerkas(g)) {
     try {
-      simpanKonteks(db, await unduh(g, deps));
+      g = await unduh(g, deps);
+      simpanKonteks(db, g);
     } catch (e) {
       console.error(`handleMessage: unduh gambar ${g.messageId} gagal, dicoba lagi setelah nama host dijawab: ${pesanError(e)}`);
     }
   }
   const id = await kirim(deps, msgSiapa(), g.messageId);
-  if (id) lacak(db, "siapa", id, g.messageId);
-  else console.error(`handleMessage: gambar ${g.messageId} tetap menunggu nama host (pertanyaan tidak terkirim atau id-nya tidak diketahui)`);
+  if (id) {
+    lacak(db, "siapa", id, g.messageId);
+    simpanKonteks(db, { ...g, ditanya: true });
+  } else {
+    console.error(`handleMessage: gambar ${g.messageId} tetap menunggu nama host; pertanyaan diulang saat proses ulang`);
+  }
 }
 
 async function antrekanDanProses(g: GambarSiap, deps: HandleDeps): Promise<void> {
@@ -145,13 +164,17 @@ async function antrekanDanProses(g: GambarSiap, deps: HandleDeps): Promise<void>
   await prosesGambar(g, deps, false);
 }
 
-async function prosesGambar(g: GambarSiap, deps: HandleDeps, diulang: boolean): Promise<void> {
-  if (sedangDiproses.has(g.messageId)) return; // mis. proses ulang terjadwal saat ekstraksi pertama belum selesai
-  sedangDiproses.add(g.messageId);
+const prosesGambar = (g: GambarSiap, deps: HandleDeps, diulang: boolean): Promise<void> =>
+  eksklusif(g.messageId, () => ekstrakDanSimpan(g, deps, diulang));
+
+/** Satu penanganan per gambar per proses (mis. proses ulang terjadwal saat penanganan pertama belum selesai). */
+async function eksklusif(messageId: string, kerja: () => Promise<void>): Promise<void> {
+  if (sedangDiproses.has(messageId)) return;
+  sedangDiproses.add(messageId);
   try {
-    await ekstrakDanSimpan(g, deps, diulang);
+    await kerja();
   } finally {
-    sedangDiproses.delete(g.messageId);
+    sedangDiproses.delete(messageId);
   }
 }
 
@@ -253,7 +276,8 @@ async function kirimTandaTerima(g: GambarSiap, at: Date, deps: HandleDeps): Prom
     const host = hostConfig(settings, sebelum?.host ?? g.host);
     const id = await kirim(deps, msgMintaRiwayat(host, e.platform), g.messageId, host.waId ? [host.waId] : undefined);
     const riwayat: Riwayat = {
-      platform: e.platform, host: host.name, beforeIso: e.at.toISOString(), ...(sebelum ? { afterIso: sebelum.at.toISOString() } : {}),
+      platform: e.platform, host: host.name, beforeIso: e.at.toISOString(), beforeDate: e.date,
+      ...(sebelum ? { afterIso: sebelum.at.toISOString(), afterDate: sebelum.date } : {}),
     };
     lacak(db, "riwayat", id, JSON.stringify(riwayat));
   }
