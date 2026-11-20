@@ -19,6 +19,7 @@ interface EntryInput {
   credit?: Partial<Record<CumulativeField, number>>;
   flags?: Flag[];
   id?: string;
+  share?: number;
 }
 function ent(p: EntryInput): LedgerEntry {
   const waktu = (hm: string): Date => J(hm.includes("T") ? hm : `${p.date}T${hm}`);
@@ -27,6 +28,7 @@ function ent(p: EntryInput): LedgerEntry {
     at: waktu(p.to), intervalStart: waktu(p.from), segment: 1,
     credit: { ...(p.omzet === undefined ? {} : { omzet: p.omzet }), ...p.credit },
     flags: p.flags ?? [],
+    ...(p.share === undefined ? {} : { share: p.share }),
   };
 }
 
@@ -223,6 +225,20 @@ describe("summarizeHosts — streak di bawah target per hari kerja", () => {
     expect(ringkas(es, { jadwal, tanpaLive: ["2026-11-15"] }).Linda!.streakDiBawah).toBe(2);
   });
 
+  it("hari yang laporan host-nya hanya belum_teratribusi dilewati sampai diatribusi (R23)", () => {
+    const es = [
+      ent({ host: "Linda", date: "2026-11-16", from: "09:00", to: "18:00", omzet: 30_000_000 }),
+      ent({ host: "Linda", date: "2026-11-17", from: "09:00", to: "12:00", omzet: 100_000 }),
+      ent({ host: "Linda", date: "2026-11-17", from: "12:00", to: "18:00", omzet: 5_000_000, flags: ["belum_teratribusi"] }),
+      ent({ host: "Linda", date: "2026-11-18", from: "09:00", to: "18:00", omzet: 100_000, flags: ["belum_teratribusi"] }),
+      ent({ host: "Linda", date: "2026-11-19", from: "09:00", to: "12:00", omzet: 100_000 }),
+    ];
+    // 19/11 di bawah, 18/11 hanya belum_teratribusi (dilewati), 17/11 di bawah (kredit teratribusi 100 rb), 16/11 memutus.
+    expect(ringkas(es).Linda!.streakDiBawah).toBe(2);
+    const jadwal = ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19"].map(shift);
+    expect(ringkas(es, { jadwal }).Linda!.streakDiBawah).toBe(2);
+  });
+
   it("hari di luar rentang aktif host dilewati", () => {
     const es = [
       ent({ host: "Linda", date: "2026-11-16", from: "09:00", to: "12:00", omzet: 100_000 }),
@@ -254,6 +270,17 @@ describe("summarizeHosts — jam on-air, konversi, disiplin, vs bulan lalu", () 
     expect(v.menitOnAir).toBe(0);
     expect(v.omzetPerJam).toBeNull();
     expect(v.konversi).toBeNull();
+  });
+
+  it("atribusi pecahan: menit on-air dikali porsi (R20)", () => {
+    const pecahan = [
+      ent({ host: "Brando", date: "2026-11-19", from: "10:00", to: "11:00", id: "s1", omzet: 300_000, share: 0.5 }),
+      ent({ host: "Vanna", date: "2026-11-19", from: "10:00", to: "11:00", id: "s1", omzet: 300_000, share: 0.5 }),
+    ];
+    const r = ringkas(pecahan);
+    expect(r.Brando!.menitOnAir).toBeCloseTo(30, 10);
+    expect(r.Vanna!.menitOnAir).toBeCloseTo(30, 10);
+    expect(r.Brando!.omzetPerJam).toBeCloseTo(600_000, 6);
   });
 
   it("disiplin = 1 − laporan bermasalah ÷ jumlah laporan (messageId) host", () => {
@@ -321,6 +348,16 @@ describe("heatmap", () => {
     expect(Object.keys(h["Sen–Kam"])).toHaveLength(24);
   });
 
+  it("entri tanpa durasi: omzet masuk jam laporan tanpa menambah jam on-air", () => {
+    const h = heatmap([
+      ent({ host: "Brando", date: "2026-11-16", from: "10:00", to: "11:00", omzet: 100_000 }),
+      ent({ host: "Brando", date: "2026-11-16", from: "10:30", to: "10:30", platform: "tiktok", omzet: 50_000 }),
+      ent({ host: "Vanna", date: "2026-11-16", from: "08:50", to: "08:50", omzet: 70_000 }),
+    ], "2026-11");
+    expect(h["Sen–Kam"][10]).toBeCloseTo(150_000, 6);
+    expect(h["Sen–Kam"][8]).toBeNull();
+  });
+
   it("dua platform host yang sama dihitung satu jam on-air", () => {
     const h = heatmap([
       ent({ host: "Brando", date: "2026-11-19", from: "10:00", to: "11:00", platform: "shopee", omzet: 100_000 }),
@@ -351,13 +388,13 @@ describe("expectedOmzet dan toKreditRows", () => {
     // Satu pesan dua platform, host sama.
     ent({ host: "Brando", date: "2026-11-19", from: "10:00", to: "11:00", platform: "shopee", id: "p4", omzet: 100_000 }),
     ent({ host: "Brando", date: "2026-11-19", from: "10:00", to: "11:00", platform: "tiktok", id: "p4", omzet: 100_000 }),
-    // Atribusi pecahan: satu entri ledger per host.
-    ent({ host: "Brando", date: "2026-11-21", from: "13:00", to: "14:00", platform: "tiktok", id: "p5", omzet: 30_000 }),
-    ent({ host: "Vanna", date: "2026-11-21", from: "13:00", to: "14:00", platform: "tiktok", id: "p5", omzet: 60_000 }),
+    // Atribusi pecahan 1/3 : 2/3 — satu entri ledger per host, kredit dan menit dikali porsi.
+    ent({ host: "Brando", date: "2026-11-21", from: "13:00", to: "14:00", platform: "tiktok", id: "p5", omzet: 30_000, share: 1 / 3 }),
+    ent({ host: "Vanna", date: "2026-11-21", from: "13:00", to: "14:00", platform: "tiktok", id: "p5", omzet: 60_000, share: 2 / 3 }),
   ];
 
   it("omzet harapan = omzet/jam semua host di jam & kelompok hari itu × jam on-air entri", () => {
-    // Sen–Kam jam 10: (120 + 80 + 200) rb ÷ (1 + 1 + 1) jam; Jum–Min jam 13: 90 rb ÷ 2 jam (dua host).
+    // Sen–Kam jam 10: (120 + 80 + 200) rb ÷ (1 + 1 + 1) jam; Jum–Min jam 13: 90 rb ÷ (1/3 + 2/3) jam.
     const m = expectedOmzet(data(), "2026-11");
     const r10 = 400_000 / 3;
     expect(m.get("p1|shopee|Brando")).toBeCloseTo(r10, 6);
@@ -365,26 +402,93 @@ describe("expectedOmzet dan toKreditRows", () => {
     expect(m.get("p4|shopee|Brando")).toBeCloseTo(r10 / 2, 6);
     expect(m.get("p4|tiktok|Brando")).toBeCloseTo(r10 / 2, 6);
     expect(m.get("p3|tiktok|(belum teratribusi)")).toBeCloseTo(r10, 6); // jam 11 tanpa data → 0
-    expect(m.get("p5|tiktok|Brando")).toBeCloseTo(45_000, 6);
-    expect(m.get("p5|tiktok|Vanna")).toBeCloseTo(45_000, 6);
+    expect(m.get("p5|tiktok|Brando")).toBeCloseTo(30_000, 6);
+    expect(m.get("p5|tiktok|Vanna")).toBeCloseTo(60_000, 6);
     expect(m.size).toBe(7);
     expect(expectedOmzet(data(), "2026-10").size).toBe(0);
   });
 
-  it("satu baris per entri, kolom kosong null, belum teratribusi ditandai", () => {
+  it("satu baris per irisan jam entri, kolom kosong null, belum teratribusi ditandai", () => {
     const es = data();
     const rows = toKreditRows(es, expectedOmzet(es, "2026-11"));
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8); // p3 (10:00–12:00) jadi dua baris
     expect(rows[0]).toEqual({
       messageId: "p1", tanggal: "2026-11-16", jam: 10, hariKelompok: "Sen–Kam", host: "Brando", platform: "shopee",
       omzet: 120_000, pesanan: null, penontonMasuk: null, komentar: null, keranjang: null, impresi: null, pengikutBaru: null,
       menitOnAir: 60, omzetHarapan: expect.closeTo(400_000 / 3, 6), status: "dihitung",
     });
-    expect(rows[2]).toMatchObject({ host: "(belum teratribusi)", platform: "tiktok", omzet: 70_000, pesanan: 2, menitOnAir: 120, status: "belum_teratribusi" });
-    expect(rows[3]!.menitOnAir + rows[4]!.menitOnAir).toBeCloseTo(60, 6);
-    expect(rows.slice(5).map((r) => [r.host, r.omzet, r.hariKelompok, r.menitOnAir])).toEqual([
-      ["Brando", 30_000, "Jum–Min", 60], ["Vanna", 60_000, "Jum–Min", 60],
+    expect(rows.slice(2, 4).map((r) => [r.host, r.jam, r.omzet, r.pesanan, r.komentar, r.menitOnAir, r.status])).toEqual([
+      ["(belum teratribusi)", 10, 35_000, 1, null, 60, "belum_teratribusi"],
+      ["(belum teratribusi)", 11, 35_000, 1, null, 60, "belum_teratribusi"],
     ]);
+    expect(rows[2]!.omzetHarapan).toBeCloseTo(400_000 / 6, 6); // harapan entri dibagi menurut menit
+    expect(rows[4]!.menitOnAir + rows[5]!.menitOnAir).toBeCloseTo(60, 6);
+    expect(rows.slice(6).map((r) => [r.host, r.omzet, r.hariKelompok, r.jam])).toEqual([
+      ["Brando", 30_000, "Jum–Min", 13], ["Vanna", 60_000, "Jum–Min", 13],
+    ]);
+    expect(rows[6]!.menitOnAir).toBeCloseTo(20, 10);
+    expect(rows[7]!.menitOnAir).toBeCloseTo(40, 10);
+  });
+
+  it("entri 11:30–13:30 dipecah menjadi tiga baris per jam (R21)", () => {
+    const e = ent({ host: "Brando", date: "2026-11-19", from: "11:30", to: "13:30", id: "q1",
+      credit: { omzet: 400_000, pesanan: 4, penontonMasuk: 120 } });
+    const rows = toKreditRows([e], new Map([["q1|shopee|Brando", 800]]));
+    expect(rows.map((r) => [r.jam, r.omzet, r.pesanan, r.penontonMasuk, r.komentar, r.menitOnAir, r.omzetHarapan])).toEqual([
+      [11, 100_000, 1, 30, null, 30, 200],
+      [12, 200_000, 2, 60, null, 60, 400],
+      [13, 100_000, 1, 30, null, 30, 200],
+    ]);
+    expect(rows.every((r) => r.messageId === "q1" && r.tanggal === "2026-11-19" && r.status === "dihitung")).toBe(true);
+  });
+
+  it("interval nol: satu baris di jam laporan, menit 0, nilai penuh", () => {
+    const e = ent({ host: "Vanna", date: "2026-11-19", from: "08:50", to: "08:50", id: "z0", credit: { omzet: 70_000, pesanan: 2 } });
+    expect(toKreditRows([e], new Map([["z0|shopee|Vanna", 0]]))).toMatchObject([
+      { jam: 8, omzet: 70_000, pesanan: 2, menitOnAir: 0, omzetHarapan: 0 },
+    ]);
+  });
+
+  // Data lengkap: banyak jam, lewat tengah malam, interval nol, dua platform, pecahan, belum teratribusi.
+  const lengkap = (): LedgerEntry[] => [
+    ...data(),
+    ent({ host: "Linda", date: "2026-11-19", from: "11:30", to: "13:30", id: "q1", credit: { omzet: 400_000, pesanan: 4, penontonMasuk: 120 } }),
+    ent({ host: "Linda", date: "2026-11-19", from: "11:45", to: "13:30", platform: "tiktok", id: "q1",
+      credit: { omzet: 210_000, pesanan: 3, penontonMasuk: 90, impresi: 4000, pengikutBaru: 2 } }),
+    ent({ host: "Vanna", date: "2026-11-20", from: "2026-11-20T22:20", to: "2026-11-21T00:40", id: "q2", credit: { omzet: 140_000, komentar: 70 } }),
+    ent({ host: "Vanna", date: "2026-11-20", from: "13:10", to: "13:10", id: "q3", credit: { omzet: 50_000, keranjang: 4 } }),
+    ent({ host: "Brando", date: "2026-11-16", from: "10:20", to: "12:50", id: "q4", omzet: 250_000 }),
+  ];
+
+  it("Σ semua baris = Σ entri untuk setiap kolom angka", () => {
+    const es = lengkap();
+    const harapan = expectedOmzet(es, "2026-11");
+    const rows = toKreditRows(es, harapan);
+    const fields = ["omzet", "pesanan", "penontonMasuk", "komentar", "keranjang", "impresi", "pengikutBaru"] as const;
+    for (const f of fields) {
+      const viaRows = rows.reduce((s, r) => s + (r[f] ?? 0), 0);
+      const viaEntries = es.reduce((s, e) => s + (e.credit[f] ?? 0), 0);
+      expect(viaRows).toBeCloseTo(viaEntries, 6);
+    }
+    expect(rows.reduce((s, r) => s + (r.omzetHarapan ?? 0), 0)).toBeCloseTo([...harapan.values()].reduce((a, b) => a + b, 0), 6);
+    const menitEntri = toKreditRows(es.slice(0, 1), new Map())[0]!.menitOnAir;
+    expect(menitEntri).toBe(60);
+  });
+
+  it("rumus gaya sheet per jam & kelompok hari (SUMIFS baris dihitung) = heatmap TS", () => {
+    const es = lengkap();
+    const rows = toKreditRows(es, expectedOmzet(es, "2026-11")).filter((r) => r.status === "dihitung" && r.tanggal.startsWith("2026-11"));
+    const h = heatmap(es, "2026-11");
+    for (const kel of ["Sen–Kam", "Jum–Min"] as const) {
+      for (let jam = 0; jam < 24; jam++) {
+        const di = rows.filter((r) => r.hariKelompok === kel && r.jam === jam);
+        const omzet = di.reduce((s, r) => s + (r.omzet ?? 0), 0);
+        const menit = di.reduce((s, r) => s + r.menitOnAir, 0);
+        const sheet = menit === 0 ? null : omzet / (menit / 60);
+        if (sheet === null) expect(h[kel][jam]).toBeNull();
+        else expect(h[kel][jam]).toBeCloseTo(sheet, 6);
+      }
+    }
   });
 
   it("omzet harapan null kalau tidak ada di peta", () => {

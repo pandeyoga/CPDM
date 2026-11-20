@@ -405,6 +405,8 @@ describe("buildLedger — jeda tak wajar dan atribusi", () => {
       [b.messageId, "Brando", { omzet: 150000, pesanan: 3 }, []],
       [b.messageId, "Vanna", { omzet: 150000, pesanan: 3 }, []],
     ]);
+    expect(es.map((e) => e.share)).toEqual([undefined, 0.5, 0.5]); // R20
+    expect("share" in es[0]!).toBe(false);
   });
 
   it("porsi pecahan tidak dibulatkan dan flag lain tetap ada", () => {
@@ -413,6 +415,7 @@ describe("buildLedger — jeda tak wajar dan atribusi", () => {
     const es = buildLedger([a, c], { ...opts, attributions });
     expect(es[1]?.credit.omzet).toBe(300001 * (1 / 3));
     expect(es[2]?.credit.omzet).toBe(300001 * (2 / 3));
+    expect([es[1]?.share, es[2]?.share]).toEqual([1 / 3, 2 / 3]);
     expect(es[1]?.flags).toEqual(["dibulatkan"]);
   });
 

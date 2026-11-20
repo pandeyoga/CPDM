@@ -26,7 +26,7 @@ export interface Funnel { shopee: FunnelShopee; tiktok: FunnelTiktok }
 
 export interface KreditRow {
   messageId: string; tanggal: string;
-  jam: number; // jam mulai interval (Asia/Jakarta, 0–23)
+  jam: number; // jam irisan (Asia/Jakarta, 0–23): satu baris per entri per jam yang dilalui intervalnya
   hariKelompok: HariKelompok; host: string; platform: Platform;
   omzet: number | null; pesanan: number | null; penontonMasuk: number | null; komentar: number | null;
   keranjang: number | null; impresi: number | null; pengikutBaru: number | null;
@@ -83,7 +83,8 @@ type Alokasi = Map<LedgerEntry, Map<number, Potongan>>;
 /**
  * Waktu on-air dibagi per host efektif per tanggal entri: di setiap potongan waktu yang dilalui k interval
  * host itu, tiap entri mendapat 1/k. Jadi Σ menit entri satu host = panjang gabungan intervalnya (dua
- * platform yang dilaporkan berselang beberapa menit tidak dihitung dua kali).
+ * platform yang dilaporkan berselang beberapa menit tidak dihitung dua kali). Entri hasil pecahan atribusi
+ * mendapat bagian itu dikali porsinya (R20).
  */
 function alokasi(entries: LedgerEntry[]): Alokasi {
   const out: Alokasi = new Map();
@@ -116,7 +117,7 @@ function alokasi(entries: LedgerEntry[]): Alokasi {
         const perJam = out.get(e)!;
         const x = perJam.get(jam) ?? { mentah: 0, menit: 0 };
         x.mentah += menit;
-        x.menit += menit / tutup.length;
+        x.menit += (menit / tutup.length) * (e.share ?? 1);
         perJam.set(jam, x);
       }
     }
@@ -130,23 +131,33 @@ function menitOnAir(alok: Alokasi, es: LedgerEntry[]): number {
   return total;
 }
 
+interface Irisan { jam: number; menit: number; porsi: number }
+
+/**
+ * Irisan jam entri: `porsi` = bagian menit interval entri di jam itu (untuk membagi omzet dan kolom lain),
+ * `menit` = menit on-air teralokasi. Interval nol → satu irisan di jam laporan, menit 0, porsi 1.
+ */
+function irisan(alok: Alokasi, e: LedgerEntry): Irisan[] {
+  const perJam = alok.get(e)!;
+  let mentah = 0;
+  for (const p of perJam.values()) mentah += p.mentah;
+  if (mentah === 0) return [{ jam: jamJakarta(e.at.getTime()), menit: 0, porsi: 1 }];
+  return [...perJam].map(([jam, p]) => ({ jam, menit: p.menit, porsi: p.mentah / mentah }));
+}
+
 type Ember = Record<HariKelompok, Map<number, { omzet: number; jam: number }>>;
 
-// Omzet dan jam on-air entri teratribusi bulan itu, dibagi ke jam yang dilalui intervalnya.
+// Omzet dan jam on-air entri teratribusi bulan itu per irisan jam — sama dengan SUMIFS baris Data Kredit "dihitung".
 function isiEmber(entries: LedgerEntry[], month: string, alok: Alokasi): Ember {
   const ember: Ember = { "Sen–Kam": new Map(), "Jum–Min": new Map() };
   for (const e of entries) {
     const omzet = e.credit.omzet;
     if (!teratribusi(e) || bulanDari(e.date) !== month || omzet === undefined) continue;
-    const perJam = alok.get(e)!;
-    let mentah = 0;
-    for (const p of perJam.values()) mentah += p.mentah;
-    if (mentah === 0) continue;
     const kelompok = ember[hariKelompok(e.date)];
-    for (const [jam, p] of perJam) {
+    for (const { jam, menit, porsi } of irisan(alok, e)) {
       const b = kelompok.get(jam) ?? { omzet: 0, jam: 0 };
-      b.omzet += (omzet * p.mentah) / mentah;
-      b.jam += p.menit / 60;
+      b.omzet += omzet * porsi;
+      b.jam += menit / 60;
       kelompok.set(jam, b);
     }
   }
@@ -172,7 +183,7 @@ export function expectedOmzet(entries: LedgerEntry[], month: string): Map<string
     if (bulanDari(e.date) !== month) continue;
     const kelompok = ember[hariKelompok(e.date)];
     let harapan = 0;
-    for (const [jam, p] of alok.get(e)!) harapan += (tarif(kelompok.get(jam)) ?? 0) * (p.menit / 60);
+    for (const { jam, menit } of irisan(alok, e)) harapan += (tarif(kelompok.get(jam)) ?? 0) * (menit / 60);
     out.set(kunci(e), harapan);
   }
   return out;
@@ -235,19 +246,26 @@ export function dailyByHost(entries: LedgerEntry[], month: string): Record<strin
   return out;
 }
 
+/** Satu baris per entri per irisan jam (R21); kolom angka dibagi menurut porsi irisan, kosong tetap null. */
 export function toKreditRows(entries: LedgerEntry[], expected: Map<string, number>): KreditRow[] {
   const alok = alokasi(entries);
-  return entries.map((e) => {
-    const nilai = (f: CumulativeField): number | null => e.credit[f] ?? null;
-    return {
-      messageId: e.messageId, tanggal: e.date, jam: jamJakarta(e.intervalStart.getTime()),
-      hariKelompok: hariKelompok(e.date), host: hostEfektif(e), platform: e.platform,
-      omzet: nilai("omzet"), pesanan: nilai("pesanan"), penontonMasuk: nilai("penontonMasuk"),
-      komentar: nilai("komentar"), keranjang: nilai("keranjang"), impresi: nilai("impresi"),
-      pengikutBaru: nilai("pengikutBaru"),
-      menitOnAir: menitOnAir(alok, [e]), omzetHarapan: expected.get(kunci(e)) ?? null,
-      status: teratribusi(e) ? "dihitung" : "belum_teratribusi",
-    };
+  return entries.flatMap((e) => {
+    const harapan = expected.get(kunci(e));
+    return irisan(alok, e).map(({ jam, menit, porsi }): KreditRow => {
+      const nilai = (f: CumulativeField): number | null => {
+        const v = e.credit[f];
+        return v === undefined ? null : v * porsi;
+      };
+      return {
+        messageId: e.messageId, tanggal: e.date, jam,
+        hariKelompok: hariKelompok(e.date), host: hostEfektif(e), platform: e.platform,
+        omzet: nilai("omzet"), pesanan: nilai("pesanan"), penontonMasuk: nilai("penontonMasuk"),
+        komentar: nilai("komentar"), keranjang: nilai("keranjang"), impresi: nilai("impresi"),
+        pengikutBaru: nilai("pengikutBaru"),
+        menitOnAir: menit, omzetHarapan: harapan === undefined ? null : harapan * porsi,
+        status: teratribusi(e) ? "dihitung" : "belum_teratribusi",
+      };
+    });
   });
 }
 
@@ -255,8 +273,9 @@ const omzetDari = (es: LedgerEntry[]): number => jumlah(es, "omzet") ?? 0;
 
 /**
  * Hari live berturut-turut sampai kemarin dengan kredit < perHariKerja. Dilewati (tidak memutus, tidak
- * menambah): izin, hari tanpa live, di luar rentang aktif host, tanpa jadwal: hari tanpa laporan host;
- * dengan jadwal: hari tanpa shift host (shift tanpa laporan dihitung kredit 0).
+ * menambah): izin, hari tanpa live, di luar rentang aktif host, hari yang laporan host-nya semua
+ * belum_teratribusi (R23), tanpa jadwal: hari tanpa laporan host; dengan jadwal: hari tanpa shift host
+ * (shift tanpa laporan dihitung kredit 0).
  */
 function streakDiBawah(host: string, es: LedgerEntry[], t: HostTarget, inp: TargetInputs, today: string): number {
   const cfg = inp.hosts.find((h) => h.name === host);
@@ -265,14 +284,16 @@ function streakDiBawah(host: string, es: LedgerEntry[], t: HostTarget, inp: Targ
   let n = 0;
   for (const d of hari.filter((x) => x <= kemarin).reverse()) {
     const laporan = es.filter((e) => e.host === host && e.date === d);
+    const teratribusiSaja = laporan.filter(teratribusi);
     const dilewati =
+      (laporan.length > 0 && teratribusiSaja.length === 0) ||
       inp.tanpaLive.includes(d) ||
       inp.izin.some((z) => z.host === host && z.date === d) ||
       (cfg?.aktifMulai !== undefined && d < cfg.aktifMulai) ||
       (cfg?.aktifSelesai !== undefined && d > cfg.aktifSelesai) ||
       (inp.jadwal ? !inp.jadwal.some((r) => r.date === d && r.host === host) : laporan.length === 0);
     if (dilewati) continue;
-    if (omzetDari(laporan.filter(teratribusi)) >= t.perHariKerja) break;
+    if (omzetDari(teratribusiSaja) >= t.perHariKerja) break;
     n++;
   }
   return n;

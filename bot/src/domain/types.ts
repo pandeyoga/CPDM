@@ -29,6 +29,7 @@ export interface LedgerEntry {
   at: Date; intervalStart: Date; segment: number;
   credit: Partial<Record<CumulativeField, number>>;
   flags: Flag[];
+  share?: number;            // porsi atribusi; hanya pada entri hasil pecahan atribusi
 }
 export interface HostConfig { name: string; waId?: string; aktifMulai?: string; aktifSelesai?: string }
 export interface Settings {

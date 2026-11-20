@@ -162,7 +162,9 @@ export function buildLedger(reports: Report[], opts: LedgerOptions): LedgerEntry
     const base = { messageId: report.messageId, platform: reading.platform, date, at, intervalStart, segment };
     const pecahan = opts.attributions?.get(`${report.messageId}|${reading.platform}`);
     if (pecahan !== undefined && pecahan.length > 0) {
-      for (const { host, share } of pecahan) entries.push({ ...base, host, credit: kali(credit, share), flags: [...flags] });
+      for (const { host, share } of pecahan) {
+        entries.push({ ...base, host, credit: kali(credit, share), flags: [...flags], share });
+      }
       continue;
     }
     const jedaTakWajar = at.getTime() - intervalStart.getTime() > maxGapMs;
