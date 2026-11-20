@@ -83,7 +83,10 @@ export class ClaudeExtractor implements Extractor {
         }],
       });
     } catch (err) {
-      if (err instanceof Anthropic.BadRequestError) return { ok: false, reason: "tidak_terbaca" };
+      if (err instanceof Anthropic.BadRequestError) {
+        console.error(`extractor: permintaan ditolak API (400): ${err.message}`);
+        return { ok: false, reason: "tidak_terbaca" };
+      }
       // RateLimitError, APIConnectionError, dan status >= 500: biarkan pemanggil mengantrekan.
       throw err;
     }
@@ -98,6 +101,8 @@ export class ClaudeExtractor implements Extractor {
     if (!parsed.success) return { ok: false, reason: "tidak_terbaca" };
 
     if (parsed.data.jenis === "bukan_layar_live") return { ok: false, reason: "bukan_layar_live" };
+    const names = parsed.data.platforms.map((p) => p.platform);
+    if (new Set(names).size !== names.length) return { ok: false, reason: "tidak_terbaca" };
     const readings = parsed.data.platforms.map(toReading).filter((r) => r.omzet !== null);
     if (parsed.data.jenis === "tidak_terbaca" || readings.length === 0) return { ok: false, reason: "tidak_terbaca" };
     return { ok: true, readings };

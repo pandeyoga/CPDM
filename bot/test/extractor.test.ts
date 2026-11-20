@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
 import { ClaudeExtractor } from "../src/infra/extractor.js";
 
@@ -17,8 +17,10 @@ const tiktok = { ...KOSONG,
   impresi_live: "23,7 rb", komentar: "213", pengikut_baru: "5", durasi: null,
 };
 
+const calls: any[] = [];
 function fake(result: unknown) {
-  const create = async () => {
+  const create = async (args: unknown) => {
+    calls.push(args);
     if (result instanceof Error) throw result;
     return result;
   };
@@ -33,13 +35,43 @@ describe("ClaudeExtractor", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.readings).toHaveLength(2);
-    const s = r.readings.find((x) => x.platform === "shopee")!;
-    const t = r.readings.find((x) => x.platform === "tiktok")!;
-    expect(s.omzet).toEqual({ value: 1317034, rounded: false });
-    expect(s.rataNontonDetik).toBe(38);
-    expect(s.durasiDetik).toBe(39632);
-    expect(t.omzet).toEqual({ value: 578000, rounded: true });
-    expect(t.impresi).toEqual({ value: 23700, rounded: true });
+    const s = r.readings.find((x) => x.platform === "shopee");
+    const t = r.readings.find((x) => x.platform === "tiktok");
+    expect(s).toEqual({
+      platform: "shopee", screen: "akhir", omzet: { value: 1317034, rounded: false },
+      pesanan: { value: 13, rounded: false }, penontonMasuk: { value: 952, rounded: false },
+      komentar: { value: 215, rounded: false }, keranjang: { value: 62, rounded: false },
+      impresi: null, pengikutBaru: null, penontonAktif: { value: 73, rounded: false },
+      rataNontonDetik: 38, durasiDetik: 39632,
+    });
+    expect(t).toEqual({
+      platform: "tiktok", screen: "akhir", omzet: { value: 578000, rounded: true },
+      pesanan: { value: 7, rounded: false }, penontonMasuk: { value: 770, rounded: false },
+      komentar: { value: 213, rounded: false }, keranjang: null,
+      impresi: { value: 23700, rounded: true }, pengikutBaru: { value: 5, rounded: false },
+      penontonAktif: null, rataNontonDetik: null, durasiDetik: null,
+    });
+  });
+  it("field asing tidak bocor ke platform lain", async () => {
+    const r = await new ClaudeExtractor(ok({ jenis: "layar_live", platforms: [{ ...tiktok, dilihat: "999", masukkan_ke_keranjang: "99" }] })).extract(img, "image/jpeg");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.readings[0]?.penontonMasuk).toEqual({ value: 770, rounded: false });
+    expect(r.readings[0]?.keranjang).toBeNull();
+  });
+  it("dua entri platform sama -> tidak_terbaca", async () => {
+    const r = await new ClaudeExtractor(ok({ jenis: "layar_live", platforms: [shopee, shopee] })).extract(img, "image/jpeg");
+    expect(r).toEqual({ ok: false, reason: "tidak_terbaca" });
+  });
+  it("argumen panggilan API", async () => {
+    calls.length = 0;
+    await new ClaudeExtractor(ok({ jenis: "layar_live", platforms: [shopee] })).extract(img, "image/jpeg");
+    const a = calls[0];
+    expect(a.model).toBe("claude-opus-5-5");
+    expect(a.betas).toEqual(["server-side-fallback-2026-07-01"]);
+    expect(a.fallbacks).toBe("default");
+    expect(a.output_config.effort).toBe("medium");
+    expect(a.messages[0].content.map((c: { type: string }) => c.type)).toEqual(["image", "text"]);
   });
   it("omzet TikTok null -> hanya Shopee", async () => {
     const r = await new ClaudeExtractor(ok({ jenis: "layar_live", platforms: [shopee, { ...tiktok, gmv_teratribusi: null }] })).extract(img, "image/jpeg");
@@ -69,6 +101,9 @@ describe("ClaudeExtractor", () => {
     const e500 = new Anthropic.InternalServerError(500, {}, "x", new Headers());
     await expect(new ClaudeExtractor(fake(e500)).extract(img, "image/jpeg")).rejects.toBe(e500);
     const e400 = new Anthropic.BadRequestError(400, {}, "bad", new Headers());
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await new ClaudeExtractor(fake(e400)).extract(img, "image/jpeg")).toEqual({ ok: false, reason: "tidak_terbaca" });
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
   });
 });
