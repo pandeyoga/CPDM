@@ -9,8 +9,8 @@ export type CaptionMatch =
   | { host: string; isMati: boolean }
   | { error: "kosong" | "tidak_dikenal" | "ganda" };
 
-// Token pendek (4-5 huruf) hanya boleh selisih 1, agar "Rina" tidak dianggap "Linda".
-const maxDistance = (len: number): number => (len >= 6 ? 2 : 1);
+// Selisih 1 bila token atau nama pendek (<=5 huruf), agar "Rina"/"pindah" tidak dianggap "Linda".
+const maxDistance = (tokenLen: number, hostLen: number): number => (Math.min(tokenLen, hostLen) <= 5 ? 1 : 2);
 const MIN_TOKEN_LENGTH = 4;
 
 function levenshtein(a: string, b: string): number {
@@ -30,7 +30,7 @@ export function matchCaption(caption: string, hosts: string[]): CaptionMatch {
   const all = caption.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 0);
   if (all.length === 0) return { error: "kosong" };
   const isMati = all.includes("mati");
-  const tokens = all.filter((t) => t !== "mati" && t.length >= MIN_TOKEN_LENGTH);
+  const tokens = all.filter((t) => t !== "mati");
 
   const exact = new Set<string>();
   const fuzzy = new Set<string>();
@@ -38,7 +38,7 @@ export function matchCaption(caption: string, hosts: string[]): CaptionMatch {
   for (const token of tokens) {
     const scored = hosts
       .map((h) => ({ h, d: levenshtein(token, h.toLowerCase()) }))
-      .filter((x) => x.d <= maxDistance(token.length));
+      .filter((x) => x.d === 0 || (token.length >= MIN_TOKEN_LENGTH && x.d <= maxDistance(token.length, x.h.length)));
     if (scored.length === 0) continue;
     const best = Math.min(...scored.map((x) => x.d));
     const winners = scored.filter((x) => x.d === best);

@@ -14,6 +14,11 @@ describe("matchCaption", () => {
     expect(matchCaption("Brnado", hosts)).toEqual({ host: "Brando", isMati: false });
     expect(matchCaption("Vana", hosts)).toEqual({ host: "Vanna", isMati: false });
   });
+  it("nama pendek persis", () => {
+    expect(matchCaption("Ani", ["Ani", "Vanna"])).toEqual({ host: "Ani", isMati: false });
+    expect(matchCaption("mati ani", ["Ani", "Vanna"])).toEqual({ host: "Ani", isMati: true });
+  });
+  it("kata umum tidak cocok nama mirip", () => expect(matchCaption("pindah lokasi", hosts)).toEqual({ error: "tidak_dikenal" }));
   it("kosong", () => expect(matchCaption("", hosts)).toEqual({ error: "kosong" }));
   it("tidak dikenal", () => expect(matchCaption("Rina", hosts)).toEqual({ error: "tidak_dikenal" }));
   it("token pendek tidak cocok", () => expect(matchCaption("Vi", hosts)).toEqual({ error: "tidak_dikenal" }));
