@@ -55,6 +55,16 @@ export function parseIncoming(payload: unknown): Incoming | null {
   return incoming;
 }
 
+/**
+ * Id pesan dari respons sendText. Kontrak WAHA: WAMessage {id: string}; PROVISIONAL (Task 0): mesin WEBJS
+ * mengembalikan objek whatsapp-web.js {id: {_serialized}}, NOWEB proto Baileys {key: {id}}.
+ */
+function sentId(data: unknown): { id: string } | null {
+  if (!isObj(data)) return null;
+  const id = str(data.id) ?? (isObj(data.id) ? str(data.id._serialized) : undefined) ?? (isObj(data.key) ? str(data.key.id) : undefined);
+  return id ? { id } : null;
+}
+
 /** Verifikasi X-Webhook-Hmac (HMAC-SHA512 hex dari body mentah). */
 export function verifyWahaHmac(rawBody: Buffer | string, headerHex: string | undefined, key: string): boolean {
   if (!key || !headerHex || !/^[0-9a-f]{128}$/i.test(headerHex)) return false;
@@ -88,11 +98,13 @@ export class WahaClient {
     return res;
   }
 
-  async sendText(chatId: string, text: string, replyToId?: string, mentions?: string[]): Promise<void> {
+  /** Mengembalikan id pesan yang dibuat (untuk melacak balasan ke pesan bot), atau null bila respons tidak memuatnya. */
+  async sendText(chatId: string, text: string, replyToId?: string, mentions?: string[]): Promise<{ id: string } | null> {
     const body: Obj = { session: this.opts.session, chatId, text };
     if (replyToId) body.reply_to = replyToId;
     if (mentions && mentions.length > 0) body.mentions = mentions;
-    await this.call("POST", "/api/sendText", `${this.base}/api/sendText`, body);
+    const res = await this.call("POST", "/api/sendText", `${this.base}/api/sendText`, body);
+    return sentId(await res.json().catch(() => null));
   }
 
   /**

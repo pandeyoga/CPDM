@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  mention, msgAckPerintah, msgKirimUlang, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, rp, rpRingkas,
+  mention, msgAckKoreksi, msgAckPerintah, msgFormatKoreksi, msgKirimUlang, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, rp, rpRingkas,
 } from "../src/domain/messages.js";
 import type { HostSummary } from "../src/domain/rekap.js";
 
@@ -57,6 +57,8 @@ describe("pesan", () => {
     expect(msgMintaRiwayat({ name: "Brando", waId: "6281@c.us" }, "shopee")).toContain("@6281");
     expect(msgAckPerintah({ kind: "izin", date: "2026-11-25", alasan: "sakit" })).toContain("25/11");
     expect(msgAckPerintah({ kind: "gangguan", scope: "tiktok", alasan: "x" })).toContain("menunggu persetujuan owner");
+    expect(msgAckKoreksi("shopee")).toBe("Koreksi Shopee dicatat, menunggu persetujuan owner.");
+    expect(msgFormatKoreksi()).toContain("koreksi shopee 1.350.000");
     expect(msgRekap("2026-11-20", rows, { Brando: 1_000_000 })).toContain("Rp1 jt");
   });
 });

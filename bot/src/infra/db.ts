@@ -8,6 +8,7 @@ export interface OutboxItem { id: number; op: OutboxOp; attempts: number; nextAt
 
 export interface Db {
   markMessage(id: string, ts: Date): boolean;
+  /** Satu laporan per (messageId, platform): satu gambar bisa memuat dua platform. Simpan ulang mengganti. */
   saveReport(r: Report): void;
   reports(month: string): Report[];
   pendingCaption: {
@@ -39,8 +40,9 @@ export interface Db {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (
-  message_id TEXT PRIMARY KEY, received_ms INTEGER NOT NULL, effective_ms INTEGER,
-  eff_ms INTEGER NOT NULL, host TEXT NOT NULL, is_mati INTEGER NOT NULL, reading TEXT NOT NULL
+  message_id TEXT NOT NULL, platform TEXT NOT NULL, received_ms INTEGER NOT NULL, effective_ms INTEGER,
+  eff_ms INTEGER NOT NULL, host TEXT NOT NULL, is_mati INTEGER NOT NULL, reading TEXT NOT NULL,
+  PRIMARY KEY (message_id, platform)
 );
 CREATE INDEX IF NOT EXISTS reports_eff ON reports (eff_ms);
 CREATE TABLE IF NOT EXISTS pending_caption (msg_id TEXT PRIMARY KEY, image_ref TEXT NOT NULL, caption TEXT NOT NULL);
@@ -69,8 +71,8 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
     mark: db.prepare("INSERT OR IGNORE INTO processed (id, ts) VALUES (?, ?)"),
     lastTs: db.prepare("SELECT MAX(ts) AS ts FROM processed"),
     saveReport: db.prepare(
-      `INSERT OR REPLACE INTO reports (message_id, received_ms, effective_ms, eff_ms, host, is_mati, reading)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`),
+      `INSERT OR REPLACE INTO reports (message_id, platform, received_ms, effective_ms, eff_ms, host, is_mati, reading)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
     reports: db.prepare(
       "SELECT * FROM reports WHERE eff_ms >= ? AND eff_ms < ? ORDER BY eff_ms, rowid"),
     capPut: db.prepare("INSERT OR REPLACE INTO pending_caption (msg_id, image_ref, caption) VALUES (?, ?, ?)"),
@@ -104,7 +106,7 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
     saveReport(r) {
       const eff = (r.effectiveAt ?? r.receivedAt).getTime();
       q.saveReport.run(
-        r.messageId, r.receivedAt.getTime(), r.effectiveAt ? r.effectiveAt.getTime() : null,
+        r.messageId, r.reading.platform, r.receivedAt.getTime(), r.effectiveAt ? r.effectiveAt.getTime() : null,
         eff, r.host, r.isMati ? 1 : 0, JSON.stringify(r.reading));
     },
     reports(month) {

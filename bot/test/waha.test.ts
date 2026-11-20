@@ -81,6 +81,15 @@ describe("WahaClient", () => {
     await client(f).sendText("1@g.us", "x");
     expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ session: "default", chatId: "1@g.us", text: "x" });
   });
+  it("sendText mengembalikan id pesan terkirim (WAMessage, WEBJS, NOWEB), null bila tidak ada", async () => {
+    const kirim = async (body: string): Promise<{ id: string } | null> =>
+      client(fake(() => new Response(body, { status: 201 })).f).sendText("1@g.us", "x");
+    expect(await kirim(JSON.stringify({ id: "true_1@g.us_3EB0AA" }))).toEqual({ id: "true_1@g.us_3EB0AA" });
+    expect(await kirim(JSON.stringify({ id: { fromMe: true, _serialized: "true_1@g.us_3EB0BB" } }))).toEqual({ id: "true_1@g.us_3EB0BB" });
+    expect(await kirim(JSON.stringify({ key: { remoteJid: "1@g.us", fromMe: true, id: "3EB0CC" } }))).toEqual({ id: "3EB0CC" });
+    expect(await kirim(JSON.stringify({}))).toBeNull();
+    expect(await kirim("")).toBeNull();
+  });
   it("non-2xx melempar error tanpa API key", async () => {
     const { f } = fake(() => json({}, 500));
     const err = await client(f).sendText("1@g.us", "x").catch((e: Error) => e);

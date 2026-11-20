@@ -1,4 +1,5 @@
-import type { Platform } from "./types.js";
+import { parseNum } from "./numbers.js";
+import type { CumulativeField, Platform } from "./types.js";
 
 export type Command =
   | { kind: "gangguan"; scope: Platform | "semua"; alasan: string }
@@ -84,4 +85,22 @@ export function parseCommand(text: string, today: string): Command | null {
   const valid = new Date(`${date}T00:00:00.000Z`);
   if (month < 1 || month > 12 || Number.isNaN(valid.getTime()) || valid.toISOString().slice(0, 10) !== date) return null;
   return { kind: "izin", date, alasan: (d[3] ?? "").trim() };
+}
+
+export interface Koreksi { platform: Platform; field: Exclude<CumulativeField, "durasiDetik">; value: number }
+
+const FIELD_KOREKSI: Record<string, Koreksi["field"]> = {
+  omzet: "omzet", pesanan: "pesanan", penonton: "penontonMasuk", dilihat: "penontonMasuk", tayangan: "penontonMasuk",
+  komentar: "komentar", keranjang: "keranjang", impresi: "impresi", pengikut: "pengikutBaru",
+};
+
+/** "[koreksi] <tiktok|shopee> [field] <angka>"; field bawaan omzet. Selain format itu null (tidak menebak). */
+export function parseKoreksi(text: string): Koreksi | null {
+  const m = /^\s*(?:koreksi\s+)?(tiktok|shopee)\s+(\S.*?)\s*$/iu.exec(text);
+  if (!m) return null;
+  const sisa = m[2]!;
+  const kata = /^(\p{L}+)\s+(\S.*)$/u.exec(sisa);
+  const field = kata ? FIELD_KOREKSI[kata[1]!.toLowerCase()] : undefined;
+  const angka = parseNum(field && kata ? kata[2]! : sisa);
+  return angka ? { platform: m[1]!.toLowerCase() as Platform, field: field ?? "omzet", value: angka.value } : null;
 }

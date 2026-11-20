@@ -112,6 +112,14 @@ export function msgOwner(
   return out.join("\n");
 }
 
+export function msgAckKoreksi(platform: Platform): string {
+  return `Koreksi ${NAMA_PLATFORM[platform]} dicatat, menunggu persetujuan owner.`;
+}
+
+export function msgFormatKoreksi(): string {
+  return "Koreksinya belum terbaca. Balas tanda terima dengan format: koreksi shopee 1.350.000 (atau misalnya: koreksi tiktok pesanan 9).";
+}
+
 export function msgAckPerintah(cmd: Command): string {
   switch (cmd.kind) {
     case "gangguan":

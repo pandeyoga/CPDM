@@ -49,6 +49,20 @@ describe("db", () => {
     expect("effectiveAt" in db.reports("2026-11")[1]!).toBe(false);
   });
 
+  it("satu pesan dua platform tersimpan dua laporan; simpan ulang platform sama mengganti", () => {
+    const db = open();
+    const at = jakartaDateTime("2026-11-10", "20:00");
+    const tiktok = rep("m1", at);
+    const shopee: Report = { ...rep("m1", at), reading: reading({ platform: "shopee", omzet: { value: 1317034, rounded: false } }) };
+    db.saveReport(tiktok);
+    db.saveReport(shopee);
+    expect(db.reports("2026-11")).toEqual([tiktok, shopee]);
+    const tiktok2: Report = { ...tiktok, host: "Budi" };
+    db.saveReport(tiktok2);
+    expect(db.reports("2026-11")).toHaveLength(2);
+    expect(db.reports("2026-11").find((r) => r.reading.platform === "tiktok")?.host).toBe("Budi");
+  });
+
   it("reports(month): batas bulan", () => {
     const db = open();
     db.saveReport(rep("prevLast", jakartaDateTime("2026-10-31", "10:00")));
