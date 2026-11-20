@@ -5,6 +5,7 @@ export interface LedgerOptions {
   maxGapMenit: number;
   liveMulai: string;
   onShift?: (host: string, date: string) => boolean;
+  /** Kunci `${messageId}|${platform}` → pembagian kredit entri itu ke host-host. */
   attributions?: Map<string, Array<{ host: string; share: number }>>;
 }
 
@@ -16,7 +17,8 @@ const FIELDS: readonly CumulativeField[] = [
   "omzet", "pesanan", "penontonMasuk", "komentar", "keranjang", "impresi", "pengikutBaru", "durasiDetik",
 ];
 const MENIT_MS = 60_000;
-// Omzet yang sama-sama dibulatkan boleh turun sampai 10% tanpa dianggap siaran baru.
+// Omzet yang turun dengan salah satu sisi dibulatkan, paling jauh 10% di bawah angka tertinggi
+// siaran, dianggap derau pembulatan, bukan siaran baru.
 const BATAS_DERAU_PEMBULATAN = 0.1;
 // Laporan siaran lanjutan mulai jam ini di hari kalender sesudah tanggal mulai ikut tanggalnya sendiri.
 const JAM_GANTI_HARI = "06:00";
@@ -27,12 +29,16 @@ interface Siaran {
   nomor: Map<string, number>; // nomor siaran ini untuk tiap tanggal entri
 }
 
+// Kiriman ulang layar akhir tidak masuk jejak: laporan sesudahnya tetap dibandingkan dengan layar akhir asli.
 interface Jejak {
   prev: Report;
   prevAt: Date;
+  prevDate: string; // tanggal entri laporan sebelumnya
   siaran: Siaran;
   siaranPerTanggal: Map<string, number>;
 }
+
+type Putus = "lanjut" | "baru" | "belum_lengkap" | "duplikat";
 
 const waktu = (r: Report): Date => r.effectiveAt ?? r.receivedAt;
 const isLayarAkhir = (r: Report): boolean => r.isMati || r.reading.screen === "akhir";
@@ -41,16 +47,23 @@ function nilai(reading: PlatformReading, field: CumulativeField): number | null 
   return field === "durasiDetik" ? reading.durasiDetik : (reading[field]?.value ?? null);
 }
 
-const derauPembulatan = (prev: Num, cur: Num): boolean =>
-  prev.rounded && cur.rounded && prev.value - cur.value <= BATAS_DERAU_PEMBULATAN * prev.value;
+const derauPembulatan = (prev: Num, cur: Num, puncak: number): boolean =>
+  (prev.rounded || cur.rounded) && puncak - cur.value <= BATAS_DERAU_PEMBULATAN * puncak;
 
-// Siaran baru kalau laporan sebelumnya layar akhir, atau omzet turun (tanpa layar akhir → belum lengkap).
-function putus(prev: Report, cur: Report): { baru: boolean; belumLengkap: boolean } {
-  if (isLayarAkhir(prev)) return { baru: true, belumLengkap: false };
+const sama = (a: PlatformReading, b: PlatformReading): boolean => FIELDS.every((f) => nilai(a, f) === nilai(b, f));
+
+// Sesudah layar akhir: kiriman ulang (semua angka sama) = duplikat, selain itu siaran baru.
+// Siaran baru belum lengkap kalau omzet turun (bukan derau), atau ganti tanggal entri dengan jeda > maxGap.
+function putus(lalu: Jejak, cur: PlatformReading, at: Date, maxGapMs: number): Putus {
+  const { prev, siaran } = lalu;
+  if (isLayarAkhir(prev)) return sama(prev.reading, cur) ? "duplikat" : "baru";
   const a = prev.reading.omzet;
-  const b = cur.reading.omzet;
-  const turun = a !== null && b !== null && b.value < a.value && !derauPembulatan(a, b);
-  return { baru: turun, belumLengkap: turun };
+  const b = cur.omzet;
+  if (a !== null && b !== null && b.value < a.value && !derauPembulatan(a, b, siaran.puncak.omzet ?? a.value)) {
+    return "belum_lengkap";
+  }
+  const gantiHari = tanggalEntri(at, siaran.mulai) !== lalu.prevDate;
+  return gantiHari && at.getTime() - lalu.prevAt.getTime() > maxGapMs ? "belum_lengkap" : "lanjut";
 }
 
 // Laporan pertama siaran: kredit nilai penuh. Sesudahnya: selisih terhadap angka tertinggi sejauh ini
@@ -68,10 +81,16 @@ function kreditkan(siaran: Siaran, cur: PlatformReading, awal: boolean): Credit 
   return credit;
 }
 
-const tanggalEntri = (at: Date, mulai: string): string => {
+function kreditNol(cur: PlatformReading): Credit {
+  const credit: Credit = {};
+  for (const field of FIELDS) if (nilai(cur, field) !== null) credit[field] = 0;
+  return credit;
+}
+
+function tanggalEntri(at: Date, mulai: string): string {
   const hari = toJakartaDate(at);
   return hari > mulai && toJakartaHM(at) >= JAM_GANTI_HARI ? hari : mulai;
-};
+}
 
 // Nomor siaran per platform per tanggal entri, mulai dari 1.
 function nomorSiaran(siaran: Siaran, date: string, perTanggal: Map<string, number>): number {
@@ -83,14 +102,13 @@ function nomorSiaran(siaran: Siaran, date: string, perTanggal: Map<string, numbe
   return nomor;
 }
 
-// Awal interval laporan pertama siaran: laporan terakhir siaran sebelumnya, atau liveMulai untuk
-// siaran pertama hari itu — kecuali liveMulai jatuh sesudah laporan ini (siaran lewat tengah malam)
-// atau sebelum laporan sebelumnya.
+// Awal interval laporan pertama siaran: laporan terakhir siaran sebelumnya di hari yang sama. Untuk
+// siaran pertama hari itu: liveMulai, atau laporan ini sendiri kalau liveMulai belum tiba — tidak pernah
+// laporan hari sebelumnya.
 function awalSiaran(at: Date, date: string, segment: number, prevAt: Date | undefined, liveMulai: string): Date {
+  if (segment > 1 && prevAt !== undefined) return prevAt;
   const mulai = jakartaDateTime(date, liveMulai);
-  const pakaiMulai = segment === 1 && mulai.getTime() <= at.getTime()
-    && (prevAt === undefined || mulai.getTime() > prevAt.getTime());
-  return pakaiMulai ? mulai : (prevAt ?? at);
+  return mulai.getTime() <= at.getTime() ? mulai : at;
 }
 
 function kali(credit: Credit, share: number): Credit {
@@ -103,6 +121,7 @@ function kali(credit: Credit, share: number): Credit {
 }
 
 export function buildLedger(reports: Report[], opts: LedgerOptions): LedgerEntry[] {
+  const maxGapMs = opts.maxGapMenit * MENIT_MS;
   const urut = reports
     .map((report, index) => ({ report, index, at: waktu(report) }))
     .sort((a, b) => a.at.getTime() - b.at.getTime() || a.index - b.index);
@@ -113,8 +132,18 @@ export function buildLedger(reports: Report[], opts: LedgerOptions): LedgerEntry
   for (const { report, at } of urut) {
     const { reading } = report;
     const lalu = jejak.get(reading.platform);
-    const p = lalu ? putus(lalu.prev, report) : { baru: true, belumLengkap: false };
-    const baru = lalu === undefined || p.baru;
+    const status: Putus = lalu ? putus(lalu, reading, at, maxGapMs) : "baru";
+
+    if (lalu !== undefined && status === "duplikat") {
+      const segment = nomorSiaran(lalu.siaran, lalu.prevDate, lalu.siaranPerTanggal);
+      entries.push({
+        messageId: report.messageId, host: report.host, platform: reading.platform, date: lalu.prevDate,
+        at, intervalStart: at, segment, credit: kreditNol(reading), flags: [],
+      });
+      continue;
+    }
+
+    const baru = lalu === undefined || status !== "lanjut";
     const siaran: Siaran = baru ? { mulai: toJakartaDate(at), puncak: {}, nomor: new Map() } : lalu.siaran;
     const siaranPerTanggal = lalu?.siaranPerTanggal ?? new Map<string, number>();
 
@@ -122,21 +151,21 @@ export function buildLedger(reports: Report[], opts: LedgerOptions): LedgerEntry
     const date = tanggalEntri(at, siaran.mulai);
     const segment = nomorSiaran(siaran, date, siaranPerTanggal);
     const intervalStart = baru ? awalSiaran(at, date, segment, lalu?.prevAt, opts.liveMulai) : lalu.prevAt;
-    jejak.set(reading.platform, { prev: report, prevAt: at, siaran, siaranPerTanggal });
+    jejak.set(reading.platform, { prev: report, prevAt: at, prevDate: date, siaran, siaranPerTanggal });
 
     const flags: Flag[] = [];
     if (baru && lalu) flags.push("siaran_baru");
-    if (p.belumLengkap) flags.push("siaran_belum_lengkap");
+    if (status === "belum_lengkap") flags.push("siaran_belum_lengkap");
     if (isLayarAkhir(report)) flags.push("layar_akhir");
     if (reading.omzet?.rounded) flags.push("dibulatkan");
 
     const base = { messageId: report.messageId, platform: reading.platform, date, at, intervalStart, segment };
-    const pecahan = opts.attributions?.get(report.messageId);
+    const pecahan = opts.attributions?.get(`${report.messageId}|${reading.platform}`);
     if (pecahan !== undefined && pecahan.length > 0) {
       for (const { host, share } of pecahan) entries.push({ ...base, host, credit: kali(credit, share), flags: [...flags] });
       continue;
     }
-    const jedaTakWajar = at.getTime() - intervalStart.getTime() > opts.maxGapMenit * MENIT_MS;
+    const jedaTakWajar = at.getTime() - intervalStart.getTime() > maxGapMs;
     if (jedaTakWajar || opts.onShift?.(report.host, date) === false) flags.push("belum_teratribusi");
     entries.push({ ...base, host: report.host, credit, flags });
   }

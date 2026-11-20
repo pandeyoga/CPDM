@@ -130,7 +130,7 @@ describe("buildLedger — siaran dan reset", () => {
     expect(es[1]?.flags).toEqual([]);
   });
 
-  it("reset lewat tengah malam: intervalStart = laporan terakhir siaran lama, bukan liveMulai", () => {
+  it("reset lewat tengah malam: siaran pertama hari itu sebelum liveMulai → intervalStart = laporan itu", () => {
     const es = buildLedger([
       rep({ host: "Linda", at: "2026-11-30T21:00", omzet: 200000 }),
       rep({ host: "Linda", at: "2026-12-01T00:30", omzet: 450000, isMati: true, screen: "akhir" }),
@@ -138,8 +138,19 @@ describe("buildLedger — siaran dan reset", () => {
     ], opts);
     expect(es[2]?.date).toBe("2026-12-01");
     expect(es[2]?.segment).toBe(1);
-    expect(es[2]?.intervalStart).toEqual(J("2026-12-01T00:30"));
+    expect(es[2]?.intervalStart).toEqual(J("2026-12-01T01:00"));
     expect(es[2]?.flags).toEqual(["siaran_baru"]);
+  });
+
+  it("mulai lebih awal dari liveMulai: intervalStart tidak pernah laporan hari sebelumnya", () => {
+    const kemarin = rep({ host: "Brando", at: "2026-11-20T21:00", omzet: 900000, isMati: true, screen: "akhir" });
+    const pagi = rep({ host: "Vanna", at: "2026-11-21T08:00", omzet: 100000 });
+    const denganKemarin = buildLedger([kemarin, pagi], opts)[1];
+    const hariItu = buildLedger([pagi], opts)[0];
+    expect(denganKemarin?.intervalStart).toEqual(J("2026-11-21T08:00"));
+    expect(denganKemarin?.flags).toEqual(["siaran_baru"]);
+    expect(hariItu?.intervalStart).toEqual(J("2026-11-21T08:00"));
+    expect(hariItu?.flags).toEqual([]);
   });
 
   it("laporan pertama hari berikutnya: intervalStart = liveMulai, nomor siaran mulai dari 1", () => {
@@ -251,6 +262,50 @@ describe("buildLedger — tanggal siaran lewat tengah malam (R13)", () => {
   });
 });
 
+describe("buildLedger — ganti hari tanpa layar akhir dan layar akhir ganda", () => {
+  it("ganti tanggal entri + jeda > maxGap tanpa layar akhir: siaran baru belum lengkap (R16)", () => {
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T21:00", omzet: 200000 }),
+      rep({ host: "Vanna", at: "2026-11-21T11:00", omzet: 450000 }),
+    ], opts);
+    expect(omzet(es)).toEqual([200000, 450000]);
+    expect(es[1]?.flags).toEqual(["siaran_baru", "siaran_belum_lengkap"]);
+    expect(es[1]?.date).toBe("2026-11-21");
+    expect(es[1]?.segment).toBe(1);
+    expect(es[1]?.intervalStart).toEqual(J("2026-11-21T09:00"));
+  });
+
+  it("layar akhir terkirim dua kali: kiriman kedua kredit 0 tanpa flag (R17)", () => {
+    const extra = { pesanan: { value: 9, rounded: false } };
+    const akhir1 = rep({ host: "Brando", at: "2026-11-20T11:10", omzet: 420000, isMati: true, screen: "akhir", extra });
+    const akhir2 = rep({ host: "Brando", at: "2026-11-20T11:12", omzet: 420000, isMati: true, screen: "akhir", extra });
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 300000, extra: { pesanan: { value: 5, rounded: false } } }),
+      akhir1,
+      akhir2,
+      rep({ host: "Brando", at: "2026-11-20T12:00", omzet: 150000 }),
+    ], opts);
+    expect(es.map((e) => [e.messageId, e.segment, e.credit, e.flags])).toEqual([
+      [es[0]?.messageId, 1, { omzet: 300000, pesanan: 5 }, []],
+      [akhir1.messageId, 1, { omzet: 120000, pesanan: 4 }, ["layar_akhir"]],
+      [akhir2.messageId, 1, { omzet: 0, pesanan: 0 }, []],
+      [es[3]?.messageId, 2, { omzet: 150000 }, ["siaran_baru"]],
+    ]);
+    expect(es[2]?.intervalStart).toEqual(J("2026-11-20T11:12"));
+    expect(es[3]?.intervalStart).toEqual(J("2026-11-20T11:10"));
+  });
+
+  it("sesudah layar akhir, angka yang beda satu field bukan duplikat", () => {
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T11:10", omzet: 420000, isMati: true, screen: "akhir", extra: { komentar: { value: 50, rounded: false } } }),
+      rep({ host: "Brando", at: "2026-11-20T12:00", omzet: 420000, extra: { komentar: { value: 51, rounded: false } } }),
+    ], opts);
+    expect(es[1]?.segment).toBe(2);
+    expect(es[1]?.credit).toEqual({ omzet: 420000, komentar: 51 });
+    expect(es[1]?.flags).toEqual(["siaran_baru"]);
+  });
+});
+
 describe("buildLedger — pembulatan", () => {
   it("flag dibulatkan kalau omzet dibulatkan", () => {
     const es = buildLedger([
@@ -280,9 +335,44 @@ describe("buildLedger — pembulatan", () => {
     expect(es[1]?.flags).toEqual(["siaran_baru", "siaran_belum_lengkap", "dibulatkan"]);
   });
 
-  it("turun kecil tapi salah satu tidak dibulatkan: siaran baru", () => {
+  it("turun ≤ 10% dengan salah satu dibulatkan: siaran sama, kredit omzet 0 (R9b)", () => {
     const es = buildLedger([
       rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 1250000, rounded: true }),
+      rep({ host: "Brando", at: "2026-11-20T11:00", omzet: 1240000 }),
+    ], opts);
+    expect(es[1]?.credit).toEqual({ omzet: 0 });
+    expect(es[1]?.segment).toBe(1);
+    expect(es[1]?.flags).toEqual([]);
+  });
+
+  it("koreksi tepat lalu bacaan dibulatkan lebih rendah: siaran sama, kredit 0 (R9b)", () => {
+    const rs = [
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 1200000, rounded: true, id: "ra" }),
+      rep({ host: "Vanna", at: "2026-11-20T11:00", omzet: 1200000, rounded: true, id: "rb" }),
+    ];
+    const es = buildLedger(applyCorrections(rs, [{ messageId: "ra", platform: "tiktok", field: "omzet", value: 1243000 }]), opts);
+    expect(es.map((e) => [e.segment, e.credit.omzet, e.flags])).toEqual([
+      [1, 1243000, []],
+      [1, 0, ["dibulatkan"]],
+    ]);
+  });
+
+  it("derau diukur dari angka tertinggi siaran, bukan laporan sebelumnya (R9b)", () => {
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 1000000, rounded: true }),
+      rep({ host: "Brando", at: "2026-11-20T10:30", omzet: 920000, rounded: true }),
+      rep({ host: "Brando", at: "2026-11-20T11:00", omzet: 850000, rounded: true }),
+    ], opts);
+    expect(es.map((e) => [e.segment, e.credit.omzet, e.flags])).toEqual([
+      [1, 1000000, ["dibulatkan"]],
+      [1, 0, ["dibulatkan"]],
+      [2, 850000, ["siaran_baru", "siaran_belum_lengkap", "dibulatkan"]],
+    ]);
+  });
+
+  it("turun kecil dengan kedua angka tepat: siaran baru", () => {
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 1250000 }),
       rep({ host: "Brando", at: "2026-11-20T11:00", omzet: 1240000 }),
     ], opts);
     expect(es[1]?.credit.omzet).toBe(1240000);
@@ -308,7 +398,7 @@ describe("buildLedger — jeda tak wajar dan atribusi", () => {
   });
 
   it("dengan attributions kreditnya terpecah sesuai porsi", () => {
-    const attributions = new Map([[b.messageId, [{ host: "Brando", share: 0.5 }, { host: "Vanna", share: 0.5 }]]]);
+    const attributions = new Map([[`${b.messageId}|tiktok`, [{ host: "Brando", share: 0.5 }, { host: "Vanna", share: 0.5 }]]]);
     const es = buildLedger([a, b], { ...opts, attributions });
     expect(es).toHaveLength(3);
     expect(es.slice(1).map((e) => [e.messageId, e.host, e.credit, e.flags])).toEqual([
@@ -319,11 +409,28 @@ describe("buildLedger — jeda tak wajar dan atribusi", () => {
 
   it("porsi pecahan tidak dibulatkan dan flag lain tetap ada", () => {
     const c = rep({ host: "Vanna", at: "2026-11-20T14:30", omzet: 600001, rounded: true });
-    const attributions = new Map([[c.messageId, [{ host: "Brando", share: 1 / 3 }, { host: "Vanna", share: 2 / 3 }]]]);
+    const attributions = new Map([[`${c.messageId}|tiktok`, [{ host: "Brando", share: 1 / 3 }, { host: "Vanna", share: 2 / 3 }]]]);
     const es = buildLedger([a, c], { ...opts, attributions });
     expect(es[1]?.credit.omzet).toBe(300001 * (1 / 3));
     expect(es[2]?.credit.omzet).toBe(300001 * (2 / 3));
     expect(es[1]?.flags).toEqual(["dibulatkan"]);
+  });
+
+  it("attributions per messageId|platform: hanya platform itu yang dipecah (R15)", () => {
+    const shopee1 = rep({ host: "Brando", at: "2026-11-20T13:00", omzet: 400000, platform: "shopee" });
+    const tiktok2 = rep({ host: "Vanna", at: "2026-11-20T14:30", omzet: 900000, platform: "tiktok", id: "z" });
+    const shopee2 = rep({ host: "Vanna", at: "2026-11-20T14:30", omzet: 700000, platform: "shopee", id: "z" });
+    const reports = [a, shopee1, tiktok2, shopee2];
+    expect(buildLedger(reports, opts).map((e) => [e.platform, e.flags])).toEqual([
+      ["tiktok", []], ["shopee", []], ["tiktok", ["belum_teratribusi"]], ["shopee", []],
+    ]);
+    const attributions = new Map([["z|tiktok", [{ host: "Brando", share: 0.5 }, { host: "Vanna", share: 0.5 }]]]);
+    const es = buildLedger(reports, { ...opts, attributions });
+    expect(es.filter((e) => e.messageId === "z").map((e) => [e.platform, e.host, e.credit.omzet, e.flags])).toEqual([
+      ["tiktok", "Brando", 300000, []],
+      ["tiktok", "Vanna", 300000, []],
+      ["shopee", "Vanna", 300000, []],
+    ]);
   });
 
   it("onShift false: belum_teratribusi, dipanggil dengan tanggal entri", () => {
