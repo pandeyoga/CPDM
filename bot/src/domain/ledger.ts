@@ -1,4 +1,4 @@
-import { jakartaDateTime, toJakartaDate } from "./time.js";
+import { jakartaDateTime, toJakartaDate, toJakartaHM } from "./time.js";
 import type { CumulativeField, Flag, LedgerEntry, Num, Platform, PlatformReading, Report } from "./types.js";
 
 export interface LedgerOptions {
@@ -18,12 +18,19 @@ const FIELDS: readonly CumulativeField[] = [
 const MENIT_MS = 60_000;
 // Omzet yang sama-sama dibulatkan boleh turun sampai 10% tanpa dianggap siaran baru.
 const BATAS_DERAU_PEMBULATAN = 0.1;
+// Laporan siaran lanjutan mulai jam ini di hari kalender sesudah tanggal mulai ikut tanggalnya sendiri.
+const JAM_GANTI_HARI = "06:00";
+
+interface Siaran {
+  mulai: string;              // tanggal (Jakarta) laporan pertama siaran
+  puncak: Credit;             // angka tertinggi tiap field sejauh ini di siaran
+  nomor: Map<string, number>; // nomor siaran ini untuk tiap tanggal entri
+}
 
 interface Jejak {
   prev: Report;
   prevAt: Date;
-  date: string;
-  segment: number;
+  siaran: Siaran;
   siaranPerTanggal: Map<string, number>;
 }
 
@@ -46,20 +53,34 @@ function putus(prev: Report, cur: Report): { baru: boolean; belumLengkap: boolea
   return { baru: turun, belumLengkap: turun };
 }
 
-// prev null = laporan pertama siaran: kredit nilai penuh. Selisih negatif dijepit ke 0.
-function hitungKredit(prev: PlatformReading | null, cur: PlatformReading): Credit {
+// Laporan pertama siaran: kredit nilai penuh. Sesudahnya: selisih terhadap angka tertinggi sejauh ini
+// di siaran, minimal 0; field tanpa angka sebelumnya di siaran tidak diberi kredit. Memperbarui puncak.
+function kreditkan(siaran: Siaran, cur: PlatformReading, awal: boolean): Credit {
   const credit: Credit = {};
   for (const field of FIELDS) {
     const sekarang = nilai(cur, field);
     if (sekarang === null) continue;
-    if (prev === null) {
-      credit[field] = sekarang;
-      continue;
-    }
-    const sebelum = nilai(prev, field);
-    if (sebelum !== null) credit[field] = Math.max(0, sekarang - sebelum);
+    const puncak = siaran.puncak[field];
+    if (awal) credit[field] = sekarang;
+    else if (puncak !== undefined) credit[field] = Math.max(0, sekarang - puncak);
+    siaran.puncak[field] = Math.max(puncak ?? sekarang, sekarang);
   }
   return credit;
+}
+
+const tanggalEntri = (at: Date, mulai: string): string => {
+  const hari = toJakartaDate(at);
+  return hari > mulai && toJakartaHM(at) >= JAM_GANTI_HARI ? hari : mulai;
+};
+
+// Nomor siaran per platform per tanggal entri, mulai dari 1.
+function nomorSiaran(siaran: Siaran, date: string, perTanggal: Map<string, number>): number {
+  const ada = siaran.nomor.get(date);
+  if (ada !== undefined) return ada;
+  const nomor = (perTanggal.get(date) ?? 0) + 1;
+  perTanggal.set(date, nomor);
+  siaran.nomor.set(date, nomor);
+  return nomor;
 }
 
 // Awal interval laporan pertama siaran: laporan terakhir siaran sebelumnya, atau liveMulai untuk
@@ -92,29 +113,20 @@ export function buildLedger(reports: Report[], opts: LedgerOptions): LedgerEntry
   for (const { report, at } of urut) {
     const { reading } = report;
     const lalu = jejak.get(reading.platform);
-    const flags: Flag[] = [];
-    let date: string;
-    let segment: number;
-    let intervalStart: Date;
-    let credit: Credit;
-
     const p = lalu ? putus(lalu.prev, report) : { baru: true, belumLengkap: false };
+    const baru = lalu === undefined || p.baru;
+    const siaran: Siaran = baru ? { mulai: toJakartaDate(at), puncak: {}, nomor: new Map() } : lalu.siaran;
     const siaranPerTanggal = lalu?.siaranPerTanggal ?? new Map<string, number>();
-    if (lalu === undefined || p.baru) {
-      date = toJakartaDate(at);
-      segment = (siaranPerTanggal.get(date) ?? 0) + 1;
-      siaranPerTanggal.set(date, segment);
-      intervalStart = awalSiaran(at, date, segment, lalu?.prevAt, opts.liveMulai);
-      credit = hitungKredit(null, reading);
-      if (lalu) flags.push("siaran_baru");
-      if (p.belumLengkap) flags.push("siaran_belum_lengkap");
-    } else {
-      ({ date, segment } = lalu);
-      intervalStart = lalu.prevAt;
-      credit = hitungKredit(lalu.prev.reading, reading);
-    }
-    jejak.set(reading.platform, { prev: report, prevAt: at, date, segment, siaranPerTanggal });
 
+    const credit = kreditkan(siaran, reading, baru);
+    const date = tanggalEntri(at, siaran.mulai);
+    const segment = nomorSiaran(siaran, date, siaranPerTanggal);
+    const intervalStart = baru ? awalSiaran(at, date, segment, lalu?.prevAt, opts.liveMulai) : lalu.prevAt;
+    jejak.set(reading.platform, { prev: report, prevAt: at, siaran, siaranPerTanggal });
+
+    const flags: Flag[] = [];
+    if (baru && lalu) flags.push("siaran_baru");
+    if (p.belumLengkap) flags.push("siaran_belum_lengkap");
     if (isLayarAkhir(report)) flags.push("layar_akhir");
     if (reading.omzet?.rounded) flags.push("dibulatkan");
 

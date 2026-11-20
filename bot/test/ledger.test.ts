@@ -189,6 +189,66 @@ describe("buildLedger — siaran dan reset", () => {
     expect(es[1]?.credit).toEqual({ omzet: 100000, komentar: 0 });
     expect(es[1]?.flags).toEqual([]);
   });
+
+  it("selisih dihitung dari angka tertinggi sejauh ini di siaran (R12)", () => {
+    const p = (value: number) => ({ pesanan: { value, rounded: false } });
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 1250000, rounded: true, extra: p(10) }),
+      rep({ host: "Brando", at: "2026-11-20T11:00", omzet: 1200000, rounded: true, extra: p(8) }),
+      rep({ host: "Vanna", at: "2026-11-20T12:00", omzet: 1300000, rounded: true, extra: p(12) }),
+    ], opts);
+    expect(es.map((e) => e.credit)).toEqual([
+      { omzet: 1250000, pesanan: 10 },
+      { omzet: 0, pesanan: 0 },
+      { omzet: 50000, pesanan: 2 },
+    ]);
+    expect(es.map((e) => e.segment)).toEqual([1, 1, 1]);
+  });
+
+  it("angka tertinggi tetap dipakai walau laporan sebelumnya null", () => {
+    const k = (value: number | null) => ({ komentar: value === null ? null : { value, rounded: false } });
+    const es = buildLedger([
+      rep({ host: "Brando", at: "2026-11-20T10:00", omzet: 300000, extra: k(9) }),
+      rep({ host: "Brando", at: "2026-11-20T11:00", omzet: 400000, extra: k(null) }),
+      rep({ host: "Vanna", at: "2026-11-20T12:00", omzet: 500000, extra: k(12) }),
+    ], opts);
+    expect(es.map((e) => e.credit)).toEqual([
+      { omzet: 300000, komentar: 9 },
+      { omzet: 100000 },
+      { omzet: 100000, komentar: 3 },
+    ]);
+  });
+});
+
+describe("buildLedger — tanggal siaran lewat tengah malam (R13)", () => {
+  it("laporan ≥ 06:00 di hari berikutnya ber-date hari itu, siaran tetap sama", () => {
+    const es = buildLedger([
+      rep({ host: "Linda", at: "2026-11-30T21:00", omzet: 200000 }),
+      rep({ host: "Linda", at: "2026-12-01T00:10", omzet: 450000 }),
+      rep({ host: "Linda", at: "2026-12-01T05:59", omzet: 500000 }),
+      rep({ host: "Brando", at: "2026-12-01T06:00", omzet: 520000 }),
+      rep({ host: "Brando", at: "2026-12-01T09:30", omzet: 600000 }),
+    ], opts);
+    expect(es.map((e) => e.date)).toEqual(["2026-11-30", "2026-11-30", "2026-11-30", "2026-12-01", "2026-12-01"]);
+    expect(omzet(es)).toEqual([200000, 250000, 50000, 20000, 80000]);
+    expect(es.some((e) => e.flags.includes("siaran_baru"))).toBe(false);
+    expect(es[4]?.intervalStart).toEqual(J("2026-12-01T06:00"));
+  });
+
+  it("nomor siaran dan onShift mengikuti tanggal entri", () => {
+    const calls: string[] = [];
+    const onShift = (_host: string, date: string) => { calls.push(date); return true; };
+    const es = buildLedger([
+      rep({ host: "Linda", at: "2026-11-30T21:00", omzet: 200000 }),
+      rep({ host: "Brando", at: "2026-12-01T09:30", omzet: 500000 }),
+      rep({ host: "Vanna", at: "2026-12-01T11:00", omzet: 100000 }),
+    ], { maxGapMenit: 1000, liveMulai: "09:00", onShift });
+    expect(es.map((e) => [e.date, e.segment])).toEqual([["2026-11-30", 1], ["2026-12-01", 1], ["2026-12-01", 2]]);
+    expect(es[1]?.flags).toEqual([]);
+    expect(es[2]?.flags).toEqual(["siaran_baru", "siaran_belum_lengkap"]);
+    expect(es[2]?.intervalStart).toEqual(J("2026-12-01T09:30"));
+    expect(calls).toEqual(["2026-11-30", "2026-12-01", "2026-12-01"]);
+  });
 });
 
 describe("buildLedger — pembulatan", () => {
