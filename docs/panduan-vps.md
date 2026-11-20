@@ -65,7 +65,7 @@ sudo ufw allow OpenSSH && sudo ufw --force enable
 Repo privat butuh "kunci" supaya VPS boleh membacanya. Buat kunci khusus baca:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/cp_deploy -N "" -C "vps-cp-live"
+mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t ed25519 -f ~/.ssh/cp_deploy -N "" -C "vps-cp-live"
 ```
 
 Tampilkan **kunci publik** (aman untuk disalin; ini bukan rahasia):
@@ -102,10 +102,16 @@ cd ~/cp-sistem/deploy
 cp .env.example .env && chmod 600 .env
 ```
 
-Buat tiga rahasia acak. Jalankan perintah ini **tiga kali**, dan catat tiap hasilnya di tempat aman (mis. pengelola sandi) untuk dimasukkan ke `.env`:
+Buat tiga rahasia acak. Jalankan perintah ini **dua kali** (dua rahasia 64 karakter: `WAHA_API_KEY` dan `WAHA_HMAC_KEY`), dan catat tiap hasilnya di tempat aman (mis. pengelola sandi) untuk dimasukkan ke `.env`:
 
 ```bash
 openssl rand -hex 32
+```
+
+Untuk sandi dashboard, buat satu lagi yang lebih pendek:
+
+```bash
+openssl rand -hex 16
 ```
 
 Buka `.env` untuk diisi:
@@ -171,7 +177,7 @@ Masuk dengan username `admin` dan sandi `WAHA_DASHBOARD_PASSWORD` dari `.env`. (
 
 1. Dengan HP lain (HP Anda), buat grup WhatsApp bernama **CP Live** (untuk uji, nanti bot dipindah ke grup CP Live yang asli di langkah akhir) dan masukkan **nomor bot**.
 2. Di grup itu kirim tiga hal:
-   1. **Foto contoh** `live-17nov.jpg` (screenshot data live) dengan caption `Brando`.
+   1. **Foto contoh** `live-17nov.jpg` (screenshot data live) dengan caption `Brando`. Berkasnya ada di repo GitHub di `bot/test/fixtures/screens/live-17nov.jpg`: buka di GitHub, klik **Download raw file**, kirim ke HP Anda (atau minta pengembang mengirimkannya), lalu kirim ke grup sebagai foto.
    2. Teks `#izin sakit`.
    3. **Balas (reply)** pesan foto tadi dengan teks apa saja, mis. `koreksi shopee 1.350.000`.
 3. Supaya uji lengkap, tambahkan juga:
@@ -263,10 +269,10 @@ Catat apakah berakhiran `@c.us` (nomor telepon) atau `@lid` (kode acak). Kalau `
 Samarkan nomor telepon (62xxxxxxxxxx menjadi `628xxxxxxxxx`) pada berkas hasil sebelum dibagikan:
 
 ```bash
-sed -i -E 's/62[0-9]{8,12}/628xxxxxxxxx/g' pesan-grup.json session-status.json
+sed -i -E 's/62[0-9]{8,12}@(c\.us|s\.whatsapp\.net)/628xxxxxxxxx@\1/g; s/"62[0-9]{8,12}"/"628xxxxxxxxx"/g' pesan-grup.json session-status.json
 ```
 
-Pastikan **tidak ada kunci rahasia** di dalamnya (hasilnya harus `0`):
+**Periksa sendiri isi kedua berkas dengan mata** (`less pesan-grup.json`) sebelum dibagikan: nama kontak (`pushName`/`notifyName`) dan nomor dalam bentuk lain bisa masih muncul; samarkan manual bila ada. Pastikan juga **tidak ada kunci rahasia** di dalamnya (hasilnya harus `0`):
 
 ```bash
 grep -c "$WAHA_API_KEY" pesan-grup.json session-status.json
@@ -311,26 +317,42 @@ git clone git@github.com:NAMA_GITHUB/cp-sistem.git && cd cp-sistem/bot
 (Kalau komputer Anda belum punya akses GitHub, unduh repo sebagai ZIP dari GitHub, ekstrak, lalu masuk ke folder `bot`.)
 
 ```bash
-npm ci && npm run build
+npm ci --ignore-scripts && npm run build
 ```
 
-Jalankan program login. **Mac/Linux** (ganti nilai di dalam tanda petik):
+Jalankan program login. Rahasia diketik lewat isian tersembunyi (tidak tersimpan di riwayat perintah). **Mac/Linux** (tiga perintah, satu per satu):
 
 ```bash
-GOOGLE_CLIENT_ID='ISI_CLIENT_ID' GOOGLE_CLIENT_SECRET='ISI_CLIENT_SECRET' node dist/scripts/google-auth.js
+read -rs -p "Client ID: " GOOGLE_CLIENT_ID && export GOOGLE_CLIENT_ID
 ```
 
-**Windows (PowerShell):**
+```bash
+read -rs -p "Client secret: " GOOGLE_CLIENT_SECRET && export GOOGLE_CLIENT_SECRET
+```
+
+```bash
+node dist/scripts/google-auth.js
+```
+
+**Windows (PowerShell)**, tiga perintah satu per satu:
 
 ```powershell
-$env:GOOGLE_CLIENT_ID='ISI_CLIENT_ID'; $env:GOOGLE_CLIENT_SECRET='ISI_CLIENT_SECRET'; node dist/scripts/google-auth.js
+$env:GOOGLE_CLIENT_ID = Read-Host "Client ID"
+```
+
+```powershell
+$env:GOOGLE_CLIENT_SECRET = [System.Net.NetworkCredential]::new("", (Read-Host "Client secret" -AsSecureString)).Password
+```
+
+```powershell
+node dist/scripts/google-auth.js
 ```
 
 Program mencetak sebuah tautan ("Buka tautan ini di browser..."). Buka tautan itu di browser, pilih akun Google owner, lalu setujui akses ke Sheets dan Drive. Setelah "Selesai" muncul di browser, kembali ke terminal: **satu baris panjang yang tercetak adalah refresh token**.
 
 Salin baris itu ke `.env` di VPS sebagai `GOOGLE_REFRESH_TOKEN=` (`nano .env`). Jangan menempelkannya ke chat. Kalau muncul pesan "Google tidak mengembalikan refresh token", buka <https://myaccount.google.com/permissions>, cabut akses aplikasi `CP Live`, lalu jalankan ulang.
 
-Hapus jejak rahasia dari terminal komputer bila perlu (Mac/Linux): `history -c`.
+Setelah selesai, tutup jendela terminal itu supaya variabel rahasia hilang.
 
 ---
 
@@ -369,7 +391,7 @@ Skrip ini mengirim email ke owner kalau bot mati lebih dari 10 menit atau WhatsA
 
 1. Buka spreadsheet "CP – Live Tracker" > **Ekstensi** > **Apps Script**.
 2. Hapus kode bawaan (`function myFunction...`).
-3. Tampilkan isi berkas di VPS, salin semuanya, lalu tempel ke editor Apps Script:
+3. Salin isi berkas: paling mudah dari GitHub, buka `apps-script/heartbeat.gs` di repo, klik **Raw**, pilih semua (Ctrl+A), salin, lalu tempel ke editor Apps Script. Alternatif, tampilkan di VPS:
 
 ```bash
 cat ~/cp-sistem/apps-script/heartbeat.gs
@@ -446,7 +468,7 @@ Harus ada baris `bot: mendengarkan di port 3000` dan **tidak ada** kata `Variabe
 docker compose exec bot node -e "fetch('http://127.0.0.1:3000/health').then(r=>r.text()).then(console.log)"
 ```
 
-Hasilnya harus `{"ok":true,"waStatus":"WORKING"}`. Dalam 5–10 menit, tab **Heartbeat** di spreadsheet terisi waktu dan `WORKING`.
+Hasilnya harus `{"ok":true,"waStatus":"WORKING"}`. Sampai 1–5 menit setelah bot baru menyala, `waStatus` bisa masih `UNKNOWN`; ulangi perintahnya sesudah beberapa menit. Dalam 5–10 menit, tab **Heartbeat** di spreadsheet terisi waktu dan `WORKING`.
 
 ---
 
@@ -500,8 +522,9 @@ cd ~/cp-sistem/deploy
 TGL=$(date +%F)
 # Salinan konsisten dari database yang sedang dipakai (aman walau bot hidup).
 docker compose exec -T bot node -e "const D=require('better-sqlite3');new D('/data/bot.db').backup('/data/cadangan-$TGL.db').then(()=>console.log('ok'))"
-# Kirim ke luar VPS (pilih SATU: scp atau rclone, hapus baris yang tidak dipakai).
-scp -q data/cadangan-$TGL.db USER@SERVER_LAIN:/folder/cadangan/
+# Kirim ke luar VPS: AKTIFKAN SATU baris di bawah (hapus tanda # di depannya) setelah mengganti
+# USER@SERVER_LAIN dan /folder/cadangan/ dengan tujuan Anda. Dibiarkan mati supaya skrip tidak berhenti sebelum pembersihan.
+# scp -q data/cadangan-$TGL.db USER@SERVER_LAIN:/folder/cadangan/
 # rclone copy data/cadangan-$TGL.db remote:cp-live-cadangan/
 # Hapus cadangan lokal yang lebih tua dari 7 hari.
 find data -name 'cadangan-*.db' -mtime +7 -delete
@@ -566,7 +589,7 @@ Email "[CP Live] Bot pulih" masuk sendiri bila sudah normal. Email hanya dikirim
 1. `docker compose ps`: `bot` dan `waha` harus `Up`.
 2. `docker compose logs --tail 100 bot`: cari galat. `webhook ... 401` atau penolakan tanda tangan berarti `WAHA_HMAC_KEY` di `.env` salah/berubah; setelah memperbaikinya jalankan `docker compose up -d --force-recreate`.
 3. Status WhatsApp `WORKING`? (perintah health di atas).
-4. `LIVE_GROUP_ID` di `.env` sama dengan ID grup, dan nomor bot masih anggota grup.
+4. `LIVE_GROUP_ID` di `.env` sama dengan ID grup sungguhan dari langkah 4d (bukan tulisan `GANTI...`), dan nomor bot masih anggota grup.
 5. Caption foto memuat nama host yang ada di tab Pengaturan.
 6. Saldo/kredit API key Claude masih ada (lihat console.anthropic.com). Kalau habis, bot membalas "Laporan diterima, sedang diproses." dan memprosesnya nanti dari antrean setelah diperbaiki.
 

@@ -541,6 +541,26 @@ describe("tab fakta tumbuh melewati grid: gateway menambah baris sebelum menulis
     expect(f.meta.filter((m) => m.op === "appendDimension")).toHaveLength(1);
   });
 
+  it("cabang geser: bulan di tengah tumbuh melewati rowCount menambah baris sebelum update", async () => {
+    const f = gridPalsu({ "Data Kredit": [H, ...[baris(1), baris(2)].map((r, k) => toKreditSheetRows([{ ...r, tanggal: k ? "2026-10-05" : "2026-09-10" }])[0]!), ...[baris(3)].map((r) => toKreditSheetRows([{ ...r, tanggal: "2026-11-02" }])[0]!)] });
+    f.rowCount.set("Data Kredit", 4); // header + 3 baris data, penuh
+    const okt = Array.from({ length: 3 }, (_, i) => ({ ...baris(10 + i), tanggal: "2026-10-05" }));
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-10", rows: okt });
+    // mulai=1, 3 baris + ekor 1 = 4 baris, berakhir di baris 6 > 4: tambah 2 + 5.000
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toEqual([{ op: "appendDimension", arg: { sheetId: 1, dimension: "ROWS", length: 2 + 5_000 } }]);
+    expect(f.calls.at(-1)).toEqual({ op: "update", range: "'Data Kredit'!A3", rows: 4 });
+  });
+
+  it("cabang penuh: tabel tidak urut ditulis ulang; baris ditambah bila hasil melewati rowCount", async () => {
+    const f = gridPalsu({ "Data Kredit": [H, ...[["2026-11-02", 1], ["2026-10-01", 2], ["2026-11-03", 3]].map(([t, n]) => toKreditSheetRows([{ ...baris(n as number), tanggal: t as string }])[0]!)] });
+    f.rowCount.set("Data Kredit", 4);
+    const nov = Array.from({ length: 3 }, (_, i) => ({ ...baris(20 + i), tanggal: "2026-11-05" }));
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-11", rows: nov });
+    // 1 baris Oktober + 3 baris November = 4 baris data, berakhir di baris 5 > 4
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toEqual([{ op: "appendDimension", arg: { sheetId: 1, dimension: "ROWS", length: 1 + 5_000 } }]);
+    expect(f.calls.at(-1)).toEqual({ op: "update", range: "'Data Kredit'!A2", rows: 4 });
+  });
+
   it("Target Harian juga; tab tanpa sheet bernama itu tidak memicu galat tambahan selain pesan jelas", async () => {
     const th = (i: number) => ({ tanggal: "2026-11-20", host: `H${i}`, target: 1, gugur: 0, sebab: "" as const });
     const f = gridPalsu({ "Target Harian": [["Tanggal", "Host", "Target", "Gugur", "Sebab"]] });
