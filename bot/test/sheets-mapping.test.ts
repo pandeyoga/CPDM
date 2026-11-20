@@ -3,7 +3,7 @@ import { KREDIT_COLUMNS } from "../src/domain/sheetFormulas.js";
 import type { KreditRow } from "../src/domain/rekap.js";
 import type { LedgerEntry } from "../src/domain/types.js";
 import {
-  fromSettingsRows, mergeKredit, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
+  fromSettingsRows, GOOGLE_TIMEOUT_MS, klienGoogle, mergeKredit, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
   parseJadwalRows, parseKehadiranRows, parseKoreksiMenunggu, parseKoreksiRows, mergeTargetHarian, tailClearRange, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
   type SheetOp,
 } from "../src/infra/sheets.js";
@@ -30,8 +30,8 @@ describe("fromSettingsRows", () => {
     expect(s.teamTarget).toEqual({ "2026-10": 50000000, "2026-11": 60000000 });
     expect(s).toMatchObject({ liveMulai: "09:00", liveSelesai: "22:00", jamPagi: "08:30", jamRekap: "22:30", maxGapMenit: 180, maxPesanPerHari: 5, ownerEmail: "owner@example.com", ownerWaId: "6281234567890@c.us" });
     expect(s.hosts).toEqual([
-      { name: "Brando", waId: "628111111111@c.us", aktifMulai: "2026-01-01" },
-      { name: "Vanna", waId: "628222222222@c.us", aktifMulai: "2026-01-01", aktifSelesai: "2026-03-19" },
+      { name: "Brando", waId: "628111111111@c.us", aktifMulai: "2026-01-01", row: 2 },
+      { name: "Vanna", waId: "628222222222@c.us", aktifMulai: "2026-01-01", aktifSelesai: "2026-03-19", row: 3 },
     ]);
   });
   it("YA menjadi true; kosong memakai bawaan", () => {
@@ -61,7 +61,7 @@ describe("fromSettingsRows: input tak valid", () => {
     ];
     const { value, invalid } = fromSettingsRows(rows);
     expect(value.teamTarget).toEqual({});
-    expect(value.hosts).toEqual([{ name: "A" }]);
+    expect(value.hosts).toEqual([{ name: "A", row: 2 }]);
     expect(invalid.map((i) => i.row)).toEqual([2, 2, 2, 2, 3, 4]);
   });
   it("melebihi 10 host dilaporkan", () => {
@@ -284,5 +284,44 @@ describe("Task 12: koreksi menunggu, atribusi dengan host tersimpan", () => {
     await g.readAtribusi(hosts);
     expect(ranges).toEqual(["'Koreksi & Atribusi'!A:L"]);
     expect(await g.readKoreksiMenunggu()).toBe(2);
+  });
+});
+
+describe("fix round 1: baris host di Pengaturan, Kondisi per posisi, timeout Google", () => {
+  it("G3 kosong: host membawa nomor barisnya; host di luar G2:G11 dilaporkan", () => {
+    const rows: unknown[][] = [
+      ["h"],
+      ["", "", "", "", "", "", "Brando"],
+      ["", "", "", "", "", "", ""],
+      ["", "", "", "", "", "", "Vanna"],
+      ...Array.from({ length: 7 }, () => ["", "", "", "", "", "", ""]),
+      ["", "", "", "", "", "", "Linda"], // baris 12
+    ];
+    const { value, invalid } = fromSettingsRows(rows);
+    expect(value.hosts.map((h) => [h.name, h.row])).toEqual([["Brando", 2], ["Vanna", 4], ["Linda", 12]]);
+    expect(invalid).toEqual([{ tab: "Pengaturan", row: 12, reason: expect.stringContaining("G2:G11") }]);
+  });
+
+  it("writeKondisi menulis per posisi; baris kosong di antaranya tetap kosong; posisi di luar 0–9 tidak ditulis", async () => {
+    const calls: Array<{ requestBody: { data: Array<{ range: string; values: unknown[][] }> } }> = [];
+    const sheets = { spreadsheets: { values: { batchUpdate: async (p: (typeof calls)[number]) => { calls.push(p); return {}; } } } } as never;
+    const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets, drive: {} as never });
+    await g.apply({ type: "writeKondisi", rows: [
+      { host: "Brando", butuhPerHariKerja: 100, disiplin: 1, status: "ok", posisi: 0 },
+      { host: "Vanna", butuhPerHariKerja: 200, disiplin: 0.5, status: "warn", posisi: 2 },
+      { host: "Linda", butuhPerHariKerja: 300, disiplin: 0.1, status: "bad", posisi: 10 },
+    ] });
+    const [butuh, lm] = calls[0]!.requestBody.data;
+    expect(butuh!.values.slice(0, 3)).toEqual([[100], [""], [200]]);
+    expect(lm!.values.slice(0, 3)).toEqual([[1, "ok"], ["", ""], [0.5, "warn"]]);
+    expect(butuh!.values.flat()).not.toContain(300);
+  });
+
+  it("klien OAuth, Sheets, dan Drive memakai timeout 30 detik", () => {
+    expect(GOOGLE_TIMEOUT_MS).toBe(30_000);
+    const k = klienGoogle({ clientId: "id", clientSecret: "rahasia", refreshToken: "rt" });
+    expect(k.sheets.context._options.timeout).toBe(30_000);
+    expect(k.drive.context._options.timeout).toBe(30_000);
+    expect((k.auth.transporter as unknown as { defaults: { timeout?: number } }).defaults.timeout).toBe(30_000);
   });
 });

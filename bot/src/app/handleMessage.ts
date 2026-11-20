@@ -45,6 +45,8 @@ export interface HandleDeps {
 export type UploadBuktiOp = { type: "uploadBukti"; messageId: string; path: string };
 
 export const KV_GANGGUAN_AKTIF = "gangguanAktif";
+/** Penanda #izin dari grup (status apa pun) per tanggal dan host; penjadwal tidak menag host itu di akhir shift. */
+export const kvIzin = (tanggal: string, host: string): string => `izin:${tanggal}|${host}`;
 const SUMBER = "Grup WA";
 /** Item tertunda baru diambil ulang setelah selama ini (yang lebih muda mungkin masih diproses). */
 const PROSES_ULANG_SETELAH_MS = 5 * 60_000;
@@ -101,6 +103,15 @@ export async function retryPending(deps: HandleDeps): Promise<void> {
     const g = bacaJson<Gambar & { host?: string }>(db, `gambar:${p.msgId}`);
     if (g && g.host === undefined && g.ditanya === false && cukupLama(g)) await eksklusif(g.messageId, () => tanyaSiapa(g, deps));
   }
+}
+
+/** Gambar yang masih tertunda (ekstraksi atau nama host): host (null bila belum diketahui) dan waktu pesannya. */
+export function gambarTertunda(db: Db): Array<{ messageId: string; host: string | null; receivedAt: Date }> {
+  const ids = [...db.pendingExtract.all().map((p) => p.msgId), ...db.pendingCaption.all().map((p) => p.msgId)];
+  return ids.flatMap((id) => {
+    const g = bacaJson<Gambar & { host?: string }>(db, `gambar:${id}`);
+    return g ? [{ messageId: id, host: g.host ?? null, receivedAt: new Date(g.receivedAt) }] : [];
+  });
 }
 
 /* ---------- Gambar ---------- */
@@ -389,6 +400,7 @@ async function perintah(m: Incoming, cmd: Command, deps: HandleDeps): Promise<vo
   if (cmd.kind === "izin") {
     const row: KehadiranRow = { tanggal: cmd.date, host, jenis: jenisIzin(alasan), alasan, sumber: SUMBER };
     db.outbox.push({ type: "appendKehadiran", row });
+    if (host) db.setKv(kvIzin(cmd.date, host), m.id);
   } else {
     // Baris Gangguan ditulis saat #normal, ketika jam mulai dan selesai sudah diketahui.
     const aktif = bacaJson<GangguanAktif[]>(db, KV_GANGGUAN_AKTIF) ?? [];

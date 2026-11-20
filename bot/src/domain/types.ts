@@ -31,7 +31,11 @@ export interface LedgerEntry {
   flags: Flag[];
   share?: number;            // porsi atribusi; hanya pada entri hasil pecahan atribusi
 }
-export interface HostConfig { name: string; waId?: string; aktifMulai?: string; aktifSelesai?: string }
+export interface HostConfig {
+  name: string; waId?: string; aktifMulai?: string; aktifSelesai?: string;
+  /** Nomor baris tabel host di Pengaturan (1-based); menentukan baris host di Dashboard Host. */
+  row?: number;
+}
 export interface Settings {
   teamTarget: Record<string, number>;   // "2026-11" → rupiah
   jadwalAktif: boolean; liveMulai: string; liveSelesai: string;

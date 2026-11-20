@@ -5,13 +5,14 @@ import type { Config } from "../config.js";
 import { msgBelumLapor, msgGangguanDitutup, msgOwner, msgPagi, msgRekap, msgTidakCocok } from "../domain/messages.js";
 import { dailyByHost } from "../domain/rekap.js";
 import { addDays, jakartaDateTime, toJakartaDate, toJakartaHM } from "../domain/time.js";
-import type { Settings } from "../domain/types.js";
+import type { HostConfig, Settings } from "../domain/types.js";
 import type { Db } from "../infra/db.js";
 import type { Extractor } from "../infra/extractor.js";
 import type { GangguanRow, Invalid, SheetOp, SheetsGateway } from "../infra/sheets.js";
 import type { Incoming, WahaClient } from "../infra/waha.js";
 import {
-  barisGangguan, handleMessage, KV_GANGGUAN_AKTIF, retryPending, type GangguanAktif, type HandleDeps, type UploadBuktiOp,
+  barisGangguan, gambarTertunda, handleMessage, KV_GANGGUAN_AKTIF, kvIzin, retryPending, type GangguanAktif, type HandleDeps,
+  type UploadBuktiOp,
 } from "./handleMessage.js";
 import {
   bacaInputOwner, catatTerapan, masalahHari, opUsang, refresh, sinkron, type InputOwner, type OpBerversi, type RefreshGateway,
@@ -21,24 +22,30 @@ import {
 /*
  * Penjadwal: cron (Asia/Jakarta) memanggil fungsi "apa yang dikerjakan pada jam T" di bawah; semuanya membaca jam
  * dari deps.now() sehingga bisa diuji dengan jam palsu.
- *   tiap menit  flushOutbox, lalu pesan pagi (jamPagi), tag akhir shift (Jadwal aktif), rekap malam
- *   tiap 5 mnt  detak (Heartbeat) dan proses ulang gambar tertunda
+ *   tiap menit  flushOutbox; lalu (setelah catch-up selesai) tutup gangguan hari lalu, pesan pagi (jamPagi), tag akhir
+ *               shift (Jadwal aktif), rekap malam, pesan owner tertunda
+ *   tiap 5 mnt  detak (Heartbeat), dan terpisah: proses ulang gambar tertunda
  *   tiap 15 mnt refresh
  *   23:50       pengecekan silang Kontrol
  * Pesan grup diserialkan di antrean `pesan` (handleMessage, catch-up, proses ulang); refresh dan pesan terjadwal di
- * antrean `tugas`. Pesan inisiatif bot lewat sendCapped (batas per penerima per hari; tanda terima tidak dihitung).
+ * antrean `tugas`. Pesan inisiatif bot lewat sendCapped (batas per penerima per hari; tanda terima tidak dihitung;
+ * rekap grup, ringkasan owner, eskalasi, dan alarm pengecekan silang bebas batas). Pesan terjadwal yang gagal terkirim
+ * (error WAHA) diulang di menit berikutnya selama masih dalam jendelanya.
  */
 
 const ZONA = "Asia/Jakarta";
 const MENIT_MS = 60_000;
-/** Pesan terjadwal yang terlewat (bot baru hidup) masih dikirim selama ini sesudah jamnya. */
+/** Pesan terjadwal yang terlewat (bot baru hidup) atau gagal terkirim masih dikirim selama ini sesudah jamnya. */
 const JENDELA_MS = 60 * MENIT_MS;
 const REKAP_SETELAH_LAPORAN_MS = 30 * MENIT_MS;
+/** Rekap ditunda selama masih ada gambar tertunda hari itu, paling lama selama ini. */
+const TUNDA_REKAP_MS = 60 * MENIT_MS;
 const CATCH_UP_MUNDUR_MS = 5 * MENIT_MS;
 const BATAS_PESAN_BAWAAN = 6;
 const SELISIH_MAKS_RP = 1;
 const BATCH_ANTREAN = 50;
 const KV_INPUT = "inputOwner";
+const KV_OWNER_TERTUNDA = "ownerTertunda";
 
 export type Gateway = RefreshGateway & Pick<SheetsGateway, "apply" | "uploadBukti" | "readKontrol" | "readKoreksiMenunggu">;
 
@@ -76,14 +83,18 @@ export interface Runtime {
   readonly tugas: Antrean;
   flush: Promise<void> | null;
   prosesUlangJalan: boolean;
-  /** Ada pesan yang mungkin terlewat (WAHA/Sheets belum siap); catch-up diulang di menit berikutnya. */
+  /**
+   * Pesan yang masuk saat bot mati mungkin belum diproses: benar sejak runtime dibuat sampai catch-up berhasil, dan
+   * lagi kalau WAHA/Sheets belum siap. Pesan terjadwal menunggu sampai ini false dan tidak ada catch-up yang berjalan.
+   */
   perluCatchUp: boolean;
+  catchUpJalan: Promise<void> | null;
 }
 
 export function buatRuntime(deps: SchedulerDeps): Runtime {
   return {
     deps, input: muatInput(deps.db), waStatus: "UNKNOWN", pesan: buatAntrean(), tugas: buatAntrean(),
-    flush: null, prosesUlangJalan: false, perluCatchUp: false,
+    flush: null, prosesUlangJalan: false, perluCatchUp: true, catchUpJalan: null,
   };
 }
 
@@ -120,7 +131,20 @@ export function terima(rt: Runtime, m: Incoming): Promise<void> {
 }
 
 export function catchUp(rt: Runtime): Promise<void> {
-  return rt.pesan(() => catchUpSekarang(rt));
+  return lacakCatchUp(rt, rt.pesan(() => catchUpSekarang(rt)));
+}
+
+/** rt.catchUpJalan = p sampai p selesai (dibersihkan sebelum pemanggil yang menunggu p dilanjutkan). */
+function lacakCatchUp(rt: Runtime, kerja: Promise<void>): Promise<void> {
+  const selesai = (): void => {
+    if (rt.catchUpJalan === p) rt.catchUpJalan = null;
+  };
+  const p: Promise<void> = kerja.then(selesai, (e: unknown) => {
+    selesai();
+    throw e;
+  });
+  rt.catchUpJalan = p;
+  return p;
 }
 
 /** messagesSince(grup, lastProcessedTs − 5 menit), urut ts; pesan yang sudah ditandai dilewati handleMessage. */
@@ -131,8 +155,10 @@ async function catchUpSekarang(rt: Runtime): Promise<void> {
     return;
   }
   const terakhir = rt.deps.db.lastProcessedTs();
-  rt.perluCatchUp = false;
-  if (!terakhir) return;
+  if (!terakhir) {
+    rt.perluCatchUp = false;
+    return;
+  }
   let pesan: Incoming[];
   try {
     pesan = await rt.deps.waha.messagesSince(rt.deps.config.LIVE_GROUP_ID, new Date(terakhir.getTime() - CATCH_UP_MUNDUR_MS));
@@ -142,6 +168,7 @@ async function catchUpSekarang(rt: Runtime): Promise<void> {
     return;
   }
   for (const m of [...pesan].sort((a, b) => a.ts.getTime() - b.ts.getTime())) await proses(rt, m, deps);
+  rt.perluCatchUp = false;
 }
 
 /** Proses ulang gambar tertunda (tiap 5 menit) di antrean pesan; tidak pernah tumpang tindih atau menumpuk. */
@@ -162,35 +189,59 @@ export async function prosesUlang(rt: Runtime): Promise<void> {
 
 /* ---------- Pengiriman pesan inisiatif bot ---------- */
 
-/** Kirim pesan inisiatif bot; kalau sentCount ≥ batas per hari, tidak dikirim dan dicatat ke Log Bot. */
-export async function sendCapped(rt: Runtime, waId: string, text: string, mentions?: string[]): Promise<boolean> {
+/**
+ * terkirim; batas = tidak dikirim karena batas harian (dicatat ke Log Bot); gagal = error WAHA (boleh diulang);
+ * tanpaPenerima = No WA owner kosong.
+ */
+export type HasilKirim = "terkirim" | "batas" | "gagal" | "tanpaPenerima";
+
+/**
+ * Kirim pesan inisiatif bot; kalau sentCount ≥ batas per hari, tidak dikirim dan dicatat ke Log Bot. `wajib` = bebas
+ * batas (tetap dihitung).
+ */
+export async function sendCapped(
+  rt: Runtime, waId: string, text: string, opsi: { mentions?: string[]; wajib?: boolean } = {},
+): Promise<HasilKirim> {
   const { db, waha, now } = rt.deps;
   const tanggal = toJakartaDate(now());
   const batas = rt.input?.settings.maxPesanPerHari ?? BATAS_PESAN_BAWAAN;
-  if (db.sentCount(waId, tanggal) >= batas) {
+  if (!opsi.wajib && db.sentCount(waId, tanggal) >= batas) {
     catatLog(rt, "WARN", `Pesan bot ke ${waId} tidak dikirim: batas ${batas} pesan per hari tercapai. Isi: ${text}`);
-    return false;
+    return "batas";
   }
   try {
-    await waha.sendText(waId, text, undefined, mentions && mentions.length > 0 ? mentions : undefined);
+    await waha.sendText(waId, text, undefined, opsi.mentions && opsi.mentions.length > 0 ? opsi.mentions : undefined);
   } catch (e) {
     console.error(`penjadwal: kirim pesan ke ${waId} gagal: ${pesanError(e)}`);
     catatLog(rt, "ERROR", `Kirim pesan ke ${waId} gagal: ${pesanError(e)}`);
-    return false;
+    return "gagal";
   }
   db.logSent(waId, tanggal);
-  return true;
+  return "terkirim";
 }
 
 /** Teguran, eskalasi, dan ringkasan hanya pribadi ke owner (Pengaturan "No WA owner"). */
-async function kirimOwner(rt: Runtime, text: string): Promise<boolean> {
+async function kirimOwner(rt: Runtime, text: string, wajib = false): Promise<HasilKirim> {
   const owner = rt.input?.settings.ownerWaId;
   if (!owner) {
     console.error("penjadwal: No WA owner belum diisi, pesan owner tidak terkirim");
     catatLog(rt, "WARN", `No WA owner belum diisi; pesan owner tidak terkirim: ${text}`);
-    return false;
+    return "tanpaPenerima";
   }
-  return sendCapped(rt, owner, text);
+  return sendCapped(rt, owner, text, { wajib });
+}
+
+/** Pemberitahuan owner yang tidak boleh hilang (gangguan ditutup otomatis): disimpan di kv, dikirim tiap menit. */
+function antreOwner(rt: Runtime, teks: string): void {
+  const { db } = rt.deps;
+  db.setKv(KV_OWNER_TERTUNDA, JSON.stringify([...bacaDaftar(db, KV_OWNER_TERTUNDA), teks]));
+}
+
+async function kirimOwnerTertunda(rt: Runtime): Promise<void> {
+  const { db } = rt.deps;
+  const sisa: string[] = [];
+  for (const teks of bacaDaftar(db, KV_OWNER_TERTUNDA)) if ((await kirimOwner(rt, teks)) === "gagal") sisa.push(teks);
+  db.setKv(KV_OWNER_TERTUNDA, JSON.stringify(sisa));
 }
 
 function catatLog(rt: Runtime, level: string, pesan: string): void {
@@ -285,21 +336,31 @@ async function refreshSekarang(rt: Runtime, today = toJakartaDate(rt.deps.now())
   }
   rt.input = hasil.input;
   simpanInput(db, hasil.input);
-  for (const p of hasil.pesanOwner) await kirimOwner(rt, p);
+  for (const p of hasil.pesanOwner) {
+    if ((await kirimOwner(rt, p.teks, p.wajib)) !== "gagal") p.terkirim();
+  }
   return hasil;
 }
 
 /* ---------- Pesan terjadwal ---------- */
 
-/** Dijalankan tiap menit: antrean ke Sheets, catch-up tertunda, lalu pesan pagi, tag akhir shift, rekap malam. */
+/**
+ * Dijalankan tiap menit: antrean ke Sheets; catch-up kalau perlu; lalu, hanya setelah catch-up selesai (laporan yang
+ * masuk saat bot mati sudah tersimpan), pesan terjadwal.
+ */
 export async function tiapMenit(rt: Runtime): Promise<void> {
   await flushOutbox(rt);
   if (!rt.input) await jalankanRefresh(rt);
-  if (rt.perluCatchUp && rt.input) await catchUp(rt);
+  if (rt.perluCatchUp && rt.input && !rt.catchUpJalan) await catchUp(rt);
+  if (rt.perluCatchUp || rt.catchUpJalan) return;
+  const kerja: Array<[string, (rt: Runtime) => Promise<void>]> = [
+    ["tutup gangguan hari lalu", tutupGangguanLama], ["pagi", pagi], ["akhir shift", akhirShift], ["rekap", rekap],
+    ["pesan owner tertunda", kirimOwnerTertunda],
+  ];
   await rt.tugas(async () => {
-    for (const [nama, kerja] of [["pagi", pagi], ["akhir shift", akhirShift], ["rekap", rekap]] as const) {
+    for (const [nama, k] of kerja) {
       try {
-        await kerja(rt);
+        await k(rt);
       } catch (e) {
         console.error(`penjadwal: ${nama} gagal: ${pesanError(e)}`);
       }
@@ -311,14 +372,7 @@ const dalamJendela = (now: Date, mulai: Date): boolean =>
   now.getTime() >= mulai.getTime() && now.getTime() < mulai.getTime() + JENDELA_MS;
 
 function gangguanAktif(db: Db): GangguanAktif[] {
-  const v = db.getKv(KV_GANGGUAN_AKTIF);
-  if (!v) return [];
-  try {
-    const arr = JSON.parse(v) as unknown;
-    return Array.isArray(arr) ? (arr as GangguanAktif[]) : [];
-  } catch {
-    return [];
-  }
+  return bacaDaftar<GangguanAktif>(db, KV_GANGGUAN_AKTIF);
 }
 
 /** Tanggal live: laporan sebelum 06:00 ikut hari sebelumnya (sama dengan ledger). */
@@ -334,6 +388,8 @@ function laporanTerakhir(db: Db, hari: string): Date | null {
   }
   return akhir;
 }
+
+const tertundaPada = (db: Db, hari: string) => gambarTertunda(db).filter((g) => hariLive(g.receivedAt) === hari);
 
 /** Rekap = jamRekap, atau 30 menit setelah laporan terakhir kalau itu lebih lambat. */
 export function waktuRekap(hari: string, jamRekap: string, terakhir: Date | null): Date {
@@ -351,88 +407,140 @@ async function pagi(rt: Runtime): Promise<void> {
   if (!dalamJendela(t, jakartaDateTime(hari, rt.input.settings.jamPagi)) || gangguanAktif(db).length > 0) return;
   const hasil = await refreshSekarang(rt, hari);
   if (!hasil) return;
-  db.setKv(k, t.toISOString());
   const { settings, jadwal, gangguan } = hasil.input;
   const rows = jadwal ? hasil.summaries.filter((s) => jadwal.some((j) => j.date === hari && j.host === s.host)) : hasil.summaries;
-  if (rows.length === 0) return;
-  const kemarin = addDays(hari, -1);
-  const gangguanKemarin = [...new Set(gangguan.filter((g) => g.date === kemarin && g.host !== "").map((g) => g.host))];
-  await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgPagi(hari, rows, gangguanKemarin), waIds(settings, rows.map((r) => r.host)));
+  if (rows.length > 0) {
+    const kemarin = addDays(hari, -1);
+    const gangguanKemarin = [...new Set(gangguan.filter((g) => g.date === kemarin && g.host !== "").map((g) => g.host))];
+    const r = await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgPagi(hari, rows, gangguanKemarin), {
+      mentions: waIds(settings, rows.map((x) => x.host)),
+    });
+    if (r === "gagal") return; // diulang menit berikutnya selama masih dalam jendela
+  }
+  db.setKv(k, t.toISOString());
 }
 
-/** Jadwal aktif: di akhir shift, tag host yang hari itu belum lapor sama sekali (sekali per host per tanggal). */
+/**
+ * Jadwal aktif: di akhir shift, satu pesan grup menag host yang hari itu belum lapor sama sekali (sekali per host per
+ * tanggal). Bukan "belum lapor": ada laporan, ada gambar tertunda atas namanya, atau ada #izin (status apa pun) /
+ * izin yang disetujui. Gambar tertunda yang pemiliknya belum diketahui menunda tag (paling lama sampai jendela habis).
+ */
 async function akhirShift(rt: Runtime): Promise<void> {
   const { db, now } = rt.deps;
   const input = rt.input;
   if (!input?.settings.jadwalAktif || !input.jadwal || gangguanAktif(db).length > 0) return;
   const t = now();
   const hari = toJakartaDate(t);
+  const tag: Array<{ k: string; host: HostConfig }> = [];
   for (const r of input.jadwal) {
     if (r.date !== hari && r.date !== addDays(hari, -1)) continue;
     const selesai = jakartaDateTime(r.selesai <= r.mulai ? addDays(r.date, 1) : r.date, r.selesai);
     const k = `akhirShift:${r.date}|${r.host}`;
-    if (!dalamJendela(t, selesai) || db.getKv(k) !== null) continue;
-    db.setKv(k, t.toISOString());
-    const sudahLapor = db.reports(r.date.slice(0, 7)).some((x) => x.host === r.host && hariLive(x.receivedAt) === r.date);
-    if (sudahLapor) continue;
-    const host = input.settings.hosts.find((h) => h.name === r.host) ?? { name: r.host };
-    await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgBelumLapor(host), host.waId ? [host.waId] : undefined);
+    if (!dalamJendela(t, selesai) || db.getKv(k) !== null || tag.some((x) => x.k === k)) continue;
+    const tertunda = tertundaPada(db, r.date);
+    if (tertunda.some((g) => g.host === null)) continue;
+    const lapor = tertunda.some((g) => g.host === r.host) ||
+      db.reports(r.date.slice(0, 7)).some((x) => x.host === r.host && hariLive(x.receivedAt) === r.date);
+    const izin = db.getKv(kvIzin(r.date, r.host)) !== null || input.izin.some((z) => z.host === r.host && z.date === r.date);
+    if (lapor || izin) {
+      db.setKv(k, t.toISOString());
+      continue;
+    }
+    tag.push({ k, host: input.settings.hosts.find((h) => h.name === r.host) ?? { name: r.host } });
   }
+  if (tag.length === 0) return;
+  const hosts = tag.map((x) => x.host);
+  const hasil = await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgBelumLapor(hosts), {
+    mentions: hosts.flatMap((h) => (h.waId ? [h.waId] : [])),
+  });
+  if (hasil !== "gagal") for (const x of tag) db.setKv(x.k, t.toISOString());
 }
 
-/** Rekap malam (grup) + ringkasan owner (pribadi); gangguan yang masih aktif ditutup lebih dulu. */
+/**
+ * Rekap malam (grup) + ringkasan owner (pribadi), keduanya bebas batas harian; gangguan yang masih aktif ditutup lebih
+ * dulu. Ditunda selama ada gambar tertunda hari itu (paling lama 60 menit). Gagal kirim → diulang tiap menit sampai
+ * 23:59 (atau 60 menit setelah percobaan pertama bila lebih lambat).
+ */
 async function rekap(rt: Runtime): Promise<void> {
   const { db, now, gateway } = rt.deps;
   const t = now();
   const hari = hariLive(t);
-  const k = `rekap:${hari}`;
-  if (!rt.input || db.getKv(k) !== null) return;
-  const terakhir = laporanTerakhir(db, hari);
-  if (t.getTime() < waktuRekap(hari, rt.input.settings.jamRekap, terakhir).getTime()) return;
+  const kGrup = `rekap:${hari}`;
+  const kOwner = `rekapOwner:${hari}`;
+  const kCoba = `rekapCoba:${hari}`;
+  if (!rt.input || (db.getKv(kGrup) !== null && db.getKv(kOwner) !== null)) return;
+  const jatuhTempo = waktuRekap(hari, rt.input.settings.jamRekap, laporanTerakhir(db, hari)).getTime();
+  if (t.getTime() < jatuhTempo) return;
+  if (tertundaPada(db, hari).length > 0 && t.getTime() < jatuhTempo + TUNDA_REKAP_MS) return;
+  const coba = db.getKv(kCoba);
+  if (coba !== null && t.getTime() > Math.max(jakartaDateTime(hari, "23:59").getTime(), Date.parse(coba) + JENDELA_MS)) {
+    catatLog(rt, "ERROR", `Rekap ${hari} tidak terkirim sampai batas waktu, dihentikan`);
+    db.setKv(kGrup, t.toISOString());
+    db.setKv(kOwner, t.toISOString());
+    return;
+  }
+  if (coba === null) db.setKv(kCoba, t.toISOString());
+  tutupGangguan(rt, () => true, () => hari);
   const hasil = await refreshSekarang(rt, hari);
   if (!hasil) return;
-  db.setKv(k, t.toISOString());
-  const ditutup = tutupGangguan(rt, hari, terakhir);
-  const { settings } = hasil.input;
-  const perHari = dailyByHost(hasil.ledger, hari.slice(0, 7));
-  const harian = Object.fromEntries(hasil.summaries.map((s) => [s.host, perHari[s.host]?.[hari] ?? 0]));
-  await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgRekap(hari, hasil.summaries, harian),
-    waIds(settings, hasil.summaries.map((s) => s.host)));
-  let koreksiMenunggu = 0;
-  try {
-    koreksiMenunggu = await gateway.readKoreksiMenunggu();
-  } catch (e) {
-    console.error(`rekap: jumlah koreksi menunggu tidak terbaca: ${pesanError(e)}`);
+  if (db.getKv(kGrup) === null) {
+    const perHari = dailyByHost(hasil.ledger, hari.slice(0, 7));
+    const harian = Object.fromEntries(hasil.summaries.map((s) => [s.host, perHari[s.host]?.[hari] ?? 0]));
+    const r = await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgRekap(hari, hasil.summaries, harian), {
+      mentions: waIds(hasil.input.settings, hasil.summaries.map((s) => s.host)), wajib: true,
+    });
+    if (r !== "gagal") db.setKv(kGrup, t.toISOString());
   }
-  // Eskalasi dikirim sendiri oleh refresh saat streak baru dimulai, tidak diulang di ringkasan.
-  await kirimOwner(rt, msgOwner(hari, { ...masalahHari(hasil.ledger, hari), koreksiMenunggu, eskalasi: [] }));
-  if (ditutup.length > 0) await kirimOwner(rt, msgGangguanDitutup(ditutup));
+  if (db.getKv(kOwner) === null) {
+    let koreksiMenunggu = 0;
+    try {
+      koreksiMenunggu = await gateway.readKoreksiMenunggu();
+    } catch (e) {
+      console.error(`rekap: jumlah koreksi menunggu tidak terbaca: ${pesanError(e)}`);
+    }
+    // Eskalasi dikirim sendiri oleh refresh saat streak baru dimulai, tidak diulang di ringkasan.
+    const teks = msgOwner(hari, { ...masalahHari(hasil.ledger, hari), koreksiMenunggu, eskalasi: [] });
+    if ((await kirimOwner(rt, teks, true)) !== "gagal") db.setKv(kOwner, t.toISOString());
+  }
 }
 
-/** Gangguan aktif saat rekap: selesai di jam live selesai, atau laporan terakhir sesudah mulai kalau lebih awal. */
-function tutupGangguan(rt: Runtime, hari: string, terakhir: Date | null): GangguanRow[] {
+/** Gangguan dari tanggal live sebelumnya yang masih aktif ditutup, supaya pesan pagi tidak tertahan. */
+async function tutupGangguanLama(rt: Runtime): Promise<void> {
+  const hari = hariLive(rt.deps.now());
+  tutupGangguan(rt, (g) => g.tanggal < hari, (g) => g.tanggal);
+}
+
+/**
+ * Tutup gangguan aktif terpilih: selesai di jam live selesai `hariTutup`, atau laporan terakhir hari itu sesudah mulai
+ * kalau lebih awal. Baris Gangguan (Menunggu) diantrekan dan owner diberi tahu (pesan tertunda, tidak hilang).
+ */
+function tutupGangguan(rt: Runtime, pilih: (g: GangguanAktif) => boolean, hariTutup: (g: GangguanAktif) => string): void {
   const { db } = rt.deps;
   const aktif = gangguanAktif(db);
-  if (aktif.length === 0 || !rt.input) return [];
-  const batas = jakartaDateTime(hari, rt.input.settings.liveSelesai);
+  const tutup = aktif.filter(pilih);
+  if (tutup.length === 0 || !rt.input) return;
   const rows: GangguanRow[] = [];
-  for (const g of aktif) {
+  for (const g of tutup) {
+    const hari = hariTutup(g);
     const mulai = jakartaDateTime(g.tanggal, g.mulai);
-    let selesai = batas;
+    const terakhir = laporanTerakhir(db, hari);
+    let selesai = jakartaDateTime(hari, rt.input.settings.liveSelesai);
     if (terakhir && terakhir > mulai && terakhir < selesai) selesai = terakhir;
     if (selesai < mulai) selesai = mulai;
     rows.push(...barisGangguan(g, selesai));
   }
   for (const row of rows) db.outbox.push({ type: "appendGangguan", row });
-  db.setKv(KV_GANGGUAN_AKTIF, "");
-  return rows;
+  const sisa = aktif.filter((g) => !pilih(g));
+  db.setKv(KV_GANGGUAN_AKTIF, sisa.length > 0 ? JSON.stringify(sisa) : "");
+  antreOwner(rt, msgGangguanDitutup(rows));
 }
 
 /* ---------- Pengecekan silang ---------- */
 
 /**
  * 23:50: realisasi bulan ini di tab Kontrol (rumus) vs hitungan bot. Selisih > Rp1, atau host tidak ada di Kontrol
- * (sel error), → Log Bot per host + satu pesan owner. Dilewati selama Data Kredit/Target Harian terbaru belum terkirim.
+ * (sel error), → Log Bot per host + satu pesan owner (bebas batas). Dilewati selama Data Kredit/Target Harian terbaru
+ * belum terkirim.
  */
 export function cekSilang(rt: Runtime): Promise<void> {
   return rt.tugas(async () => {
@@ -455,7 +563,7 @@ export function cekSilang(rt: Runtime): Promise<void> {
     for (const s of beda) {
       catatLog(rt, "WARN", `Pengecekan silang: ${s.host} di Kontrol ${kontrol[s.host] ?? "(kosong/error)"}, hitungan bot ${s.realisasi}`);
     }
-    if (beda.length > 0) await kirimOwner(rt, msgTidakCocok(beda.map((s) => s.host)));
+    if (beda.length > 0) await kirimOwner(rt, msgTidakCocok(beda.map((s) => s.host)), true);
   });
 }
 
@@ -463,15 +571,15 @@ export function cekSilang(rt: Runtime): Promise<void> {
 
 /**
  * Daftarkan cron dan jalankan urutan awal: muat input owner, catch-up (dimasukkan ke antrean pesan lebih dulu dari
- * webhook mana pun), refresh, detak. Panggil sebelum server mulai mendengarkan.
+ * webhook mana pun; pesan terjadwal menunggu sampai selesai), refresh, detak. Panggil sebelum server mendengarkan.
  */
 export function startScheduler(deps: SchedulerDeps): { rt: Runtime; siap: Promise<void>; stop: () => Promise<void> } {
   const rt = buatRuntime(deps);
   const awal = muatAwal(rt);
-  const cu = rt.pesan(async () => {
+  const cu = lacakCatchUp(rt, rt.pesan(async () => {
     await awal;
     await catchUpSekarang(rt);
-  });
+  }));
   const siap = (async () => {
     await cu;
     await jalankanRefresh(rt);
@@ -482,7 +590,9 @@ export function startScheduler(deps: SchedulerDeps): { rt: Runtime; siap: Promis
   const log = (nama: string) => (e: unknown) => console.error(`penjadwal: ${nama} gagal: ${pesanError(e)}`);
   const tugas = [
     cron.schedule("* * * * *", () => tiapMenit(rt).catch(log("tiap menit")), opsi),
-    cron.schedule("*/5 * * * *", () => Promise.all([detak(rt), prosesUlang(rt)]).catch(log("detak/proses ulang")), opsi),
+    // Detak terpisah dari proses ulang: antrean pesan yang sibuk tidak boleh menahan Heartbeat.
+    cron.schedule("*/5 * * * *", () => detak(rt).catch(log("detak")), opsi),
+    cron.schedule("*/5 * * * *", () => prosesUlang(rt).catch(log("proses ulang")), opsi),
     cron.schedule("*/15 * * * *", () => jalankanRefresh(rt).catch(log("refresh")), opsi),
     cron.schedule("50 23 * * *", () => cekSilang(rt).catch(log("pengecekan silang")), opsi),
   ];
@@ -518,6 +628,17 @@ function muatInput(db: Db): InputOwner | null {
     return { ...o, atribusi: new Map(o.atribusi) };
   } catch {
     return null;
+  }
+}
+
+function bacaDaftar<T = string>(db: Db, k: string): T[] {
+  const v = db.getKv(k);
+  if (!v) return [];
+  try {
+    const arr = JSON.parse(v) as unknown;
+    return Array.isArray(arr) ? (arr as T[]) : [];
+  } catch {
+    return [];
   }
 }
 

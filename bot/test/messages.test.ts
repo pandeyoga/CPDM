@@ -80,7 +80,8 @@ describe("pesan penjadwal (Task 12)", () => {
     expect(msgEskalasi(["Brando", "Vanna"]).split("\n")).toHaveLength(2);
   });
   it("tag akhir shift menag host; teks status kondisi", () => {
-    expect(msgBelumLapor({ name: "Brando", waId: "628111111111@c.us" })).toMatch(/^@628111111111 /);
+    expect(msgBelumLapor([{ name: "Brando", waId: "628111111111@c.us" }])).toMatch(/^@628111111111 shift/);
+    expect(msgBelumLapor([{ name: "Brando", waId: "628111111111@c.us" }, { name: "Linda" }])).toMatch(/^@628111111111 @Linda shift/);
     expect(teksStatus(sum("A", { status: "ok" }))).toBe("✅ sesuai jalur");
     expect(teksStatus(sum("A", { status: "warn" }))).toBe("⚠️ sedikit tertinggal");
     expect(teksStatus(sum("A", { status: "bad" }))).toBe("🔴 tertinggal");

@@ -147,9 +147,9 @@ export function msgEskalasi(nama: string[]): string {
   return nama.map(barisEskalasi).join("\n");
 }
 
-/** Tag di grup untuk host yang masuk shift tapi belum lapor sama sekali (hanya Jadwal aktif = YA). */
-export function msgBelumLapor(host: HostConfig): string {
-  return `${mention(host)} shift hari ini sudah selesai, tapi laporan live-nya belum masuk. Mohon kirim screenshot layar data live ya.`;
+/** Satu tag di grup untuk host yang masuk shift tapi belum lapor sama sekali (hanya Jadwal aktif = YA). */
+export function msgBelumLapor(hosts: HostConfig[]): string {
+  return `${hosts.map(mention).join(" ")} shift hari ini sudah selesai, tapi laporan live-nya belum masuk. Mohon kirim screenshot layar data live ya.`;
 }
 
 /** Pengecekan silang malam: tab Kontrol berbeda lebih dari Rp1 dari hitungan bot. */
@@ -167,8 +167,9 @@ export function msgInputTidakValid(items: Array<{ tab: string; row: number; reas
 
 export function msgGangguanDitutup(rows: Array<{ tanggal: string; host: string; mulai: string; selesai: string }>): string {
   return [
-    "Gangguan belum ditutup dengan #normal sampai rekap malam, jadi bot mencatat jam selesainya otomatis (menunggu persetujuan di tab Gangguan):",
+    "Gangguan belum ditutup dengan #normal, jadi bot mencatat jam selesainya otomatis di jam selesai live (menunggu persetujuan di tab Gangguan):",
     ...rows.map((r) => `- ${r.host || "(host belum diisi)"} ${tgl(r.tanggal)} ${r.mulai}–${r.selesai}`),
+    "Kalau gangguannya masih berlangsung, kirim #gangguan lagi di grup.",
   ].join("\n");
 }
 

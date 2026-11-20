@@ -57,7 +57,13 @@ describe("refresh: eskalasi", () => {
     s.pada(J("2026-11-20", "10:00"));
     r = await refresh(s.deps, "2026-11-20");
     expect(r.eskalasiBaru).toEqual(["Brando"]);
-    expect(r.pesanOwner).toEqual([msgEskalasi(["Brando"])]);
+    expect(r.pesanOwner.map((p) => [p.teks, p.wajib])).toEqual([[msgEskalasi(["Brando"]), true]]);
+
+    // Gagal kirim (terkirim() tidak dipanggil) → refresh berikutnya mengulang.
+    s.pada(J("2026-11-20", "10:05"));
+    r = await refresh(s.deps, "2026-11-20");
+    expect(r.eskalasiBaru).toEqual(["Brando"]);
+    r.pesanOwner[0]!.terkirim();
 
     s.pada(J("2026-11-20", "10:15"));
     r = await refresh(s.deps, "2026-11-20");
@@ -81,6 +87,8 @@ describe("refresh: eskalasi", () => {
     s.pada(J("2026-11-25", "09:00"));
     r = await refresh(s.deps, "2026-11-25");
     expect(r.eskalasiBaru).toEqual(["Brando"]);
+    expect(s.db.getKv("eskalasi:Brando")).toBe("2026-11-17");
+    r.pesanOwner[0]!.terkirim();
     expect(s.db.getKv("eskalasi:Brando")).toBe("2026-11-22");
   });
 });
@@ -151,8 +159,8 @@ describe("refresh: operasi tulis", () => {
     expect(ops.map((o) => [o.type, o.month ?? ""]).sort()).toEqual([
       ["upsertKredit", ""], ["writeKondisi", ""], ["writeTargetHarian", "2026-10"], ["writeTargetHarian", "2026-11"],
     ]);
-    const kondisi = ops.find((o) => o.type === "writeKondisi")!.rows as Array<{ host: string; status: string }>;
-    expect(kondisi.map((k) => k.host)).toEqual(["Brando", "Vanna", "Linda"]);
+    const kondisi = ops.find((o) => o.type === "writeKondisi")!.rows as Array<{ host: string; status: string; posisi: number }>;
+    expect(kondisi.map((k) => [k.host, k.posisi])).toEqual([["Brando", 0], ["Vanna", 1], ["Linda", 2]]);
     expect(kondisi[0]!.status).not.toBe("");
 
     // Tidak ada perubahan → tidak ada operasi baru.
@@ -208,7 +216,13 @@ describe("refresh: input owner tidak valid", () => {
     const log = (): string[] => s.opsBaru().filter((o) => o.type === "appendLog").map((o) => o.pesan as string);
     expect(log()).toEqual([expect.stringContaining("Pengaturan baris 3")]);
     expect(r.pesanOwner).toHaveLength(1);
-    expect(r.pesanOwner[0]).toContain("Pengaturan baris 3");
+    expect(r.pesanOwner[0]!.teks).toContain("Pengaturan baris 3");
+
+    // Gagal kirim → pesan owner diulang, baris Log Bot tidak dobel.
+    r = await refresh(s.deps, "2026-11-20");
+    expect(log()).toEqual([]);
+    expect(r.pesanOwner).toHaveLength(1);
+    r.pesanOwner[0]!.terkirim();
 
     r = await refresh(s.deps, "2026-11-20");
     expect(log()).toEqual([]);
@@ -218,8 +232,8 @@ describe("refresh: input owner tidak valid", () => {
     r = await refresh(s.deps, "2026-11-20");
     expect(log()).toEqual([expect.stringContaining("Pengaturan baris 9")]);
     expect(r.pesanOwner).toHaveLength(1);
-    expect(r.pesanOwner[0]).toContain("Linda");
-    expect(r.pesanOwner[0]).not.toContain("baris 3");
+    expect(r.pesanOwner[0]!.teks).toContain("Linda");
+    expect(r.pesanOwner[0]!.teks).not.toContain("baris 3");
     expect(s.invalid).toEqual([]); // dikuras
   });
 
@@ -247,3 +261,14 @@ describe("refresh: input owner tidak valid", () => {
   });
 });
 
+
+describe("refresh: Kondisi per baris Pengaturan (fix round 1)", () => {
+  it("G3 kosong: Vanna di posisi 2; host di luar G2:G11 tidak ditulis", async () => {
+    const s = setup(J("2026-11-20", "11:00"));
+    const base = s.g.settings;
+    s.g.settings = { ...base, hosts: [{ ...base.hosts[0]!, row: 2 }, { ...base.hosts[1]!, row: 4 }, { name: "Linda", row: 12 }] };
+    await refresh(s.deps, "2026-11-20");
+    const kondisi = s.opsBaru().find((o) => o.type === "writeKondisi")!.rows as Array<{ host: string; posisi: number }>;
+    expect(kondisi.map((k) => [k.host, k.posisi])).toEqual([["Brando", 0], ["Vanna", 2]]);
+  });
+});

@@ -6,10 +6,11 @@ import {
   waktuRekap, type SchedulerDeps,
 } from "../src/app/scheduler.js";
 import { KV_GANGGUAN_AKTIF } from "../src/app/handleMessage.js";
-import { msgBelumLapor, msgTidakCocok } from "../src/domain/messages.js";
+import { msgBelumLapor, msgEskalasi, msgTidakCocok } from "../src/domain/messages.js";
 import { addDays } from "../src/domain/time.js";
 import type { ExtractResult } from "../src/domain/types.js";
 import type { OutboxOp } from "../src/infra/db.js";
+import type { Incoming } from "../src/infra/waha.js";
 import type { GangguanRow, Invalid } from "../src/infra/sheets.js";
 import {
   bacaan, fakeExtractor, fakeGateway, fakeWaha, gambar, GROUP, J, laporan, ok, OWNER, semuaOp, settingsDasar, tempat, WA,
@@ -120,7 +121,7 @@ describe("gangguan dan jadwal", () => {
     expect(await menit(s, "2026-11-20", "14:59", "15:05")).toEqual([]);
     s.db.setKv(KV_GANGGUAN_AKTIF, "");
     const kirim = await menit(s, "2026-11-20", "15:06", "15:10");
-    expect(kirim.map((k) => k.text)).toEqual([msgBelumLapor({ name: "Brando", waId: WA.Brando })]);
+    expect(kirim.map((k) => k.text)).toEqual([msgBelumLapor([{ name: "Brando", waId: WA.Brando }])]);
   });
 
   it("jadwal aktif: tag tepat di akhir shift hanya untuk host yang belum lapor; jadwal tidak aktif: tidak ada tag", async () => {
@@ -128,7 +129,7 @@ describe("gangguan dan jadwal", () => {
     s.g.jadwal = jadwal;
     s.db.saveReport(laporan("v1", "Vanna", J("2026-11-20", "18:00"), 400_000));
     const kirim = await menit(s, "2026-11-20", "14:58", "15:03");
-    expect(kirim).toEqual([{ hm: "15:00", chatId: GROUP, text: msgBelumLapor({ name: "Brando", waId: WA.Brando }) }]);
+    expect(kirim).toEqual([{ hm: "15:00", chatId: GROUP, text: msgBelumLapor([{ name: "Brando", waId: WA.Brando }]) }]);
     expect(s.w.sent.at(-1)!.mentions).toEqual([WA.Brando]);
     expect((await menit(s, "2026-11-20", "21:59", "22:05")).filter((k) => k.chatId === GROUP)).toEqual([]);
 
@@ -195,15 +196,19 @@ describe("sendCapped", () => {
     const s = setup();
     jam(J("2026-11-20", "10:00"));
     await jalankanRefresh(s.rt);
-    const hasil: boolean[] = [];
+    const hasil: string[] = [];
     for (let i = 1; i <= 7; i++) hasil.push(await sendCapped(s.rt, GROUP, `pesan ${i}`));
-    expect(hasil).toEqual([true, true, true, true, true, true, false]);
+    expect(hasil).toEqual(["terkirim", "terkirim", "terkirim", "terkirim", "terkirim", "terkirim", "batas"]);
     expect(s.w.ke(GROUP).map((m) => m.text)).toEqual(["pesan 1", "pesan 2", "pesan 3", "pesan 4", "pesan 5", "pesan 6"]);
     expect(s.log("batas 6 pesan")).toEqual([expect.stringContaining("pesan 7")]);
-    expect(await sendCapped(s.rt, OWNER, "untuk owner")).toBe(true);
+    expect(await sendCapped(s.rt, OWNER, "untuk owner")).toBe("terkirim");
+    s.w.gagalKirim = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await sendCapped(s.rt, OWNER, "gagal")).toBe("gagal");
+    s.w.gagalKirim = false;
 
     jam(J(addDays("2026-11-20", 1), "10:00"));
-    expect(await sendCapped(s.rt, GROUP, "pesan besok")).toBe(true);
+    expect(await sendCapped(s.rt, GROUP, "pesan besok")).toBe("terkirim");
   });
 });
 
@@ -442,5 +447,224 @@ describe("detak dan refresh", () => {
 
     // Salinan input owner bertahan di db untuk restart berikutnya.
     expect(buatRuntime(s.deps).input?.settings.hosts.map((h) => h.name)).toEqual(["Brando", "Vanna", "Linda"]);
+  });
+});
+
+/* ---------- Fix round 1 ---------- */
+
+const rekapGrup = (s: Setup) => s.w.ke(GROUP).filter((m) => m.text.startsWith("Rekap malam"));
+const tagBelumLapor = (s: Setup) => s.w.ke(GROUP).filter((m) => m.text.includes("laporan live-nya belum masuk"));
+const detik = (d: Date, n: number): Date => new Date(d.getTime() + n * 1000);
+
+describe("fix 1: pesan terjadwal menunggu catch-up saat mulai", () => {
+  it("bot mati 21:00–22:35: rekap tidak dikirim 22:36 sebelum laporan yang terlewat tersimpan; dikirim 22:50 memuatnya", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(detik(J("2026-11-20", "22:35"), 30));
+    const s = setup();
+    s.db.saveReport(laporan("b0", "Brando", J("2026-11-20", "18:00"), 300_000));
+    s.db.markMessage("lama", J("2026-11-20", "21:00"));
+    // Riwayat chat WAHA masih diambil (belum ada laporan maupun gambar tertunda di db).
+    let lepas!: (m: Incoming[]) => void;
+    s.w.messagesSince = () => new Promise<Incoming[]>((r) => { lepas = r; });
+    s.ex.hasil.push(ok(bacaan("shopee", 500_000)), ok(bacaan("shopee", 900_000)));
+    const jalan = startScheduler(s.deps);
+    await vi.advanceTimersByTimeAsync(60_000); // tick 22:36, catch-up masih berjalan
+    expect(rekapGrup(s)).toEqual([]);
+    lepas([gambar("A", "Brando", J("2026-11-20", "21:30")), gambar("B", "Vanna", J("2026-11-20", "22:20"))]);
+    await jalan.siap;
+    await vi.advanceTimersByTimeAsync(13 * 60_000); // s/d 22:49:30
+    expect(rekapGrup(s)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000); // 22:50 = laporan terakhir 22:20 + 30 menit
+    expect(rekapGrup(s)).toHaveLength(1);
+    // Kredit hari ini hanya dari laporan hasil catch-up (laporan 18:00 belum teratribusi: jeda dari 09:00 > 240 menit).
+    expect(rekapGrup(s)[0]!.text).toContain("*Brando*: hari ini Rp200 rb");
+    expect(rekapGrup(s)[0]!.text).toContain("*Vanna*: hari ini Rp400 rb");
+    await jalan.stop();
+  });
+
+  it("restart 15:10 saat laporan 14:30 Brando masih di catch-up: tidak ditag", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(detik(J("2026-11-20", "15:09"), 30));
+    const s = setup({ jadwalAktif: true });
+    s.g.jadwal = [{ date: "2026-11-20", host: "Brando", mulai: "09:00", selesai: "15:00" }];
+    s.db.markMessage("lama", J("2026-11-20", "14:00"));
+    let lepas!: (m: Incoming[]) => void;
+    s.w.messagesSince = () => new Promise<Incoming[]>((r) => { lepas = r; });
+    s.ex.hasil.push(ok(bacaan("shopee", 500_000)));
+    const jalan = startScheduler(s.deps);
+    await vi.advanceTimersByTimeAsync(60_000); // tick 15:10, riwayat chat masih diambil
+    expect(tagBelumLapor(s)).toEqual([]);
+    lepas([gambar("A", "Brando", J("2026-11-20", "14:30"))]);
+    await jalan.siap;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(tagBelumLapor(s)).toEqual([]);
+    expect(s.db.reports("2026-11").map((r) => r.messageId)).toEqual(["A"]);
+    await jalan.stop();
+  });
+});
+
+describe("fix 1 + 8: siapa yang tidak ditag di akhir shift", () => {
+  const shift = (host: string) => ({ date: "2026-11-20", host, mulai: "09:00", selesai: "15:00" });
+  const izinGrup = (from: string, text: string): Incoming => ({
+    id: `izin-${text}`, chatId: GROUP, from, ts: J("2026-11-20", "10:00"), text, hasImage: false,
+  });
+
+  it("gambar tertunda atas nama host dan #izin (menunggu) → tidak ditag; sisanya satu pesan gabungan", async () => {
+    const s = setup({ jadwalAktif: true });
+    s.g.jadwal = [shift("Brando"), shift("Vanna"), shift("Linda")];
+    jam(J("2026-11-20", "10:00"));
+    await jalankanRefresh(s.rt);
+    await terima(s.rt, izinGrup(WA.Brando, "#izin sakit Linda"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    jam(J("2026-11-20", "14:30"));
+    s.ex.hasil.push(new Error("529 overloaded")); // gambar Brando tertunda di ekstraksi
+    await terima(s.rt, gambar("P", "Brando", J("2026-11-20", "14:30")));
+    expect(s.db.pendingExtract.all()).toHaveLength(1);
+    await menit(s, "2026-11-20", "14:59", "15:03");
+    expect(tagBelumLapor(s).map((m) => [m.text, m.mentions])).toEqual([
+      [msgBelumLapor([{ name: "Vanna", waId: WA.Vanna }]), [WA.Vanna]],
+    ]);
+  });
+
+  it("izin disetujui → tidak ditag; beberapa host belum lapor → satu pesan menag semuanya", async () => {
+    const s = setup({ jadwalAktif: true });
+    s.g.jadwal = [shift("Brando"), shift("Vanna"), shift("Linda")];
+    s.g.kehadiran = [{ host: "Vanna", date: "2026-11-20" }];
+    await menit(s, "2026-11-20", "14:59", "15:03");
+    expect(tagBelumLapor(s).map((m) => [m.text, m.mentions])).toEqual([
+      [msgBelumLapor([{ name: "Brando", waId: WA.Brando }, { name: "Linda" }]), [WA.Brando]],
+    ]);
+  });
+
+  it("gambar tertunda yang pemiliknya belum diketahui menunda tag sampai jendela habis", async () => {
+    const s = setup({ jadwalAktif: true });
+    s.g.jadwal = [shift("Brando")];
+    jam(J("2026-11-20", "14:30"));
+    await jalankanRefresh(s.rt);
+    await terima(s.rt, gambar("Q", "", J("2026-11-20", "14:30"))); // tanpa caption → ditanya "siapa"
+    expect(s.db.pendingCaption.all()).toHaveLength(1);
+    await menit(s, "2026-11-20", "15:00", "16:05");
+    expect(tagBelumLapor(s)).toEqual([]);
+  });
+});
+
+describe("fix 1: rekap ditunda selama ada gambar tertunda hari itu (maks 60 menit)", () => {
+  it("ekstraksi terus gagal → rekap 23:30, bukan 22:30", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "21:00"));
+    await jalankanRefresh(s.rt);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    s.ex.hasil.push(new Error("529 overloaded"));
+    await terima(s.rt, gambar("P", "Brando", J("2026-11-20", "21:00")));
+    const kirim = await menit(s, "2026-11-20", "22:29", "23:31");
+    expect(kirim.filter((k) => k.text.startsWith("Rekap malam")).map((k) => k.hm)).toEqual(["23:30"]);
+  });
+});
+
+describe("fix 2: gagal kirim diulang", () => {
+  it("WAHA gagal sekali pukul 22:30 → rekap grup dan ringkasan owner terkirim 22:31, sekali", async () => {
+    const s = setup();
+    s.db.saveReport(laporan("b1", "Brando", J("2026-11-20", "10:00"), 1_000_000));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const kirim = await menit(s, "2026-11-20", "22:28", "22:40", (hm) => { s.w.gagalKirim = hm === "22:30"; });
+    expect(kirim.map((k) => [k.hm, k.chatId])).toEqual([["22:31", GROUP], ["22:31", OWNER]]);
+    expect(s.log("Kirim pesan ke")).toHaveLength(2); // grup dan owner gagal pukul 22:30
+  });
+
+  it("pesan pagi gagal 08:00 → terkirim 08:01", async () => {
+    const s = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const kirim = await menit(s, "2026-11-20", "07:59", "08:10", (hm) => { s.w.gagalKirim = hm === "08:00"; });
+    expect(kirim.filter((k) => k.chatId === GROUP).map((k) => k.hm)).toEqual(["08:01"]);
+  });
+
+  it("gagal kirim terus sampai 23:59 → rekap dihentikan dengan Log Bot", async () => {
+    const s = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await menit(s, "2026-11-20", "22:29", "23:59", () => { s.w.gagalKirim = true; });
+    s.w.gagalKirim = false;
+    expect(await menit(s, "2026-11-21", "00:00", "00:05")).toEqual([]);
+    expect(s.log("Rekap 2026-11-20 tidak terkirim")).toHaveLength(1);
+  });
+
+  it("eskalasi yang gagal terkirim diulang di refresh berikutnya, lalu tidak lagi", async () => {
+    const s = setup();
+    for (const [i, d] of ["2026-11-17", "2026-11-18", "2026-11-19"].entries()) {
+      s.db.saveReport(laporan(`b${i}`, "Brando", J(d, "12:00"), 100_000 + i * 10_000, { isMati: true }));
+    }
+    jam(J("2026-11-20", "10:00"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    s.w.gagalKirim = true;
+    await jalankanRefresh(s.rt);
+    s.w.gagalKirim = false;
+    await jalankanRefresh(s.rt);
+    await jalankanRefresh(s.rt);
+    expect(s.w.ke(OWNER).map((m) => m.text)).toEqual([msgEskalasi(["Brando"])]);
+  });
+});
+
+describe("fix 4: batas pesan", () => {
+  it("rekap grup, ringkasan owner, eskalasi, dan alarm pengecekan silang tetap terkirim walau batas harian habis", async () => {
+    const s = setup();
+    for (const [i, d] of ["2026-11-17", "2026-11-18", "2026-11-19"].entries()) {
+      s.db.saveReport(laporan(`b${i}`, "Brando", J(d, "12:00"), 100_000 + i * 10_000, { isMati: true }));
+    }
+    jam(J("2026-11-20", "07:00"));
+    await jalankanRefresh(s.rt); // sebelum jam pagi: eskalasi belum dilaporkan
+    for (let i = 0; i < 6; i++) {
+      await sendCapped(s.rt, GROUP, `g${i}`);
+      await sendCapped(s.rt, OWNER, `o${i}`);
+    }
+    jam(J("2026-11-20", "09:00"));
+    await jalankanRefresh(s.rt);
+    expect(s.w.ke(OWNER).at(-1)!.text).toBe(msgEskalasi(["Brando"]));
+    await menit(s, "2026-11-20", "22:30", "22:30");
+    expect(rekapGrup(s)).toHaveLength(1);
+    expect(s.w.ke(OWNER).at(-1)!.text).toMatch(/^Ringkasan owner/);
+    jam(J("2026-11-20", "23:50"));
+    s.g.kontrol = { Brando: 0, Vanna: 0 };
+    await cekSilang(s.rt);
+    expect(s.w.ke(OWNER).at(-1)!.text).toBe(msgTidakCocok(["Brando", "Linda"]));
+  });
+});
+
+describe("fix 5: detak tidak tertahan antrean pesan", () => {
+  it("antrean pesan macet → Heartbeat tetap ditulis tiap 5 menit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(detik(J("2026-11-20", "10:00"), 30));
+    const s = setup();
+    const jalan = startScheduler(s.deps);
+    await jalan.siap;
+    s.ex.hasil.push(new Promise<ExtractResult>(() => {})); // ekstraksi tidak pernah selesai
+    void terima(jalan.rt, gambar("X", "Brando", J("2026-11-20", "10:00")));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.ex.calls).toBe(1); // antrean pesan kini tertahan ekstraksi ini
+    const awal = s.g.applied.filter((o) => o.type === "writeHeartbeat").length;
+    await vi.advanceTimersByTimeAsync(15 * 60_000); // 10:05, 10:10, 10:15
+    expect(s.g.applied.filter((o) => o.type === "writeHeartbeat").length - awal).toBe(3);
+    await jalan.stop();
+  });
+});
+
+describe("fix 7: gangguan dari tanggal sebelumnya", () => {
+  it("masih aktif pagi berikutnya → ditutup di jam selesai live hari itu (Menunggu + owner), pesan pagi tetap terkirim", async () => {
+    const s = setup();
+    s.db.saveReport(laporan("v1", "Vanna", J("2026-11-19", "19:00"), 400_000));
+    s.db.setKv(KV_GANGGUAN_AKTIF, JSON.stringify([{ tanggal: "2026-11-19", mulai: "20:00", host: "Brando", alasan: "listrik", scope: "semua" }]));
+    const kirim = await menit(s, "2026-11-20", "07:59", "08:01");
+    const rows = s.semua().filter((o) => o.type === "appendGangguan").map((o) => o.row as GangguanRow);
+    expect(rows).toEqual([{ tanggal: "2026-11-19", host: "Brando", mulai: "20:00", selesai: "22:00", alasan: "listrik", sumber: "Grup WA" }]);
+    expect(s.db.getKv(KV_GANGGUAN_AKTIF)).toBe("");
+    expect(kirim.filter((k) => k.chatId === OWNER).map((k) => k.text)).toEqual([expect.stringContaining("Brando 19/11 20:00–22:00")]);
+    expect(kirim.filter((k) => k.chatId === GROUP).map((k) => k.hm)).toEqual(["08:00"]);
+  });
+
+  it("gangguan hari ini tetap aktif (pagi tetap ditahan)", async () => {
+    const s = setup();
+    const hariIni = { tanggal: "2026-11-20", mulai: "07:30", host: "Vanna", alasan: "internet", scope: "semua" };
+    s.db.setKv(KV_GANGGUAN_AKTIF, JSON.stringify([{ tanggal: "2026-11-19", mulai: "20:00", host: "Brando", alasan: "listrik", scope: "semua" }, hariIni]));
+    const kirim = await menit(s, "2026-11-20", "07:59", "08:01");
+    expect(JSON.parse(s.db.getKv(KV_GANGGUAN_AKTIF)!)).toEqual([hariIni]);
+    expect(kirim.filter((k) => k.chatId === GROUP)).toEqual([]);
   });
 });

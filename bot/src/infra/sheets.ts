@@ -29,6 +29,8 @@ export const PENGATURAN_KEY_ORDER = Object.values(PENGATURAN_KEYS);
 export const PENGATURAN_TARGET_HEADERS = ["Bulan", "Target"] as const;
 export const PENGATURAN_HOST_HEADERS = ["Nama", "No WA", "Aktif mulai", "Aktif selesai"] as const;
 export const DAFTAR_HOST_RANGE = "Pengaturan!G2:G11";
+/** Baris pertama dan terakhir DAFTAR_HOST; host di luar itu tidak tampil di Dashboard Host. */
+export const BARIS_HOST = { pertama: 2, terakhir: 11 } as const;
 export const PENGATURAN_KOLOM = { kunci: "A", nilai: "B", bulan: "D", target: "E", host: "G", polaSesi: "L" } as const;
 export const MAX_HOST_PENGATURAN = 10;
 const PENGATURAN_READ = "A1:N60";
@@ -154,7 +156,8 @@ export function fromSettingsRows(rows: Cell[][]): Parsed<Settings> {
     const nama = text(r[6]);
     if (nama === "") return;
     if (hosts.length >= MAX_HOST_PENGATURAN) return bad(row, `Host "${nama}" melebihi batas ${MAX_HOST_PENGATURAN} host`);
-    const host: HostConfig = { name: nama };
+    if (row > BARIS_HOST.terakhir) bad(row, `Host "${nama}" di luar daftar host G${BARIS_HOST.pertama}:G${BARIS_HOST.terakhir}; tidak tampil di Dashboard Host`);
+    const host: HostConfig = { name: nama, row };
     if (!blank(r[7])) {
       const waId = toWaId(r[7]);
       if (waId) host.waId = waId;
@@ -376,7 +379,11 @@ export interface KoreksiRow {
 }
 export interface GangguanRow { tanggal: string; host: string; mulai: string; selesai: string; alasan: string; sumber: string }
 export interface KehadiranRow { tanggal: string; host: string; jenis: "Sakit" | "Izin" | "Cuti" | "Telat"; alasan: string; sumber: string }
-export interface KondisiRow { host: string; butuhPerHariKerja: number | null; disiplin: number | null; status: string }
+export interface KondisiRow {
+  host: string; butuhPerHariKerja: number | null; disiplin: number | null; status: string;
+  /** Posisi di DAFTAR_HOST (0 = baris G2); tanpa ini dipakai urutan array. Di luar 0–9 tidak ditulis. */
+  posisi?: number;
+}
 
 export type SheetOp =
   | { type: "appendSesi"; rows: NilaiSel[][] }
@@ -415,6 +422,21 @@ export type DriveClient = drive_v3.Drive;
 type GatewayConfig = Pick<Config, "LIVE_SPREADSHEET_ID" | "BUKTI_FOLDER_ID"> &
   Partial<Pick<Config, "GOOGLE_CLIENT_ID" | "GOOGLE_CLIENT_SECRET" | "GOOGLE_REFRESH_TOKEN" | "JADWAL_SPREADSHEET_ID">>;
 
+/** Batas waktu setiap panggilan Google (token OAuth, Sheets, Drive) supaya permintaan macet tidak menahan antrean. */
+export const GOOGLE_TIMEOUT_MS = 30_000;
+
+export function klienGoogle(cfg: { clientId: string; clientSecret: string; refreshToken: string }) {
+  const auth = new google.auth.OAuth2({
+    clientId: cfg.clientId, clientSecret: cfg.clientSecret, transporterOptions: { timeout: GOOGLE_TIMEOUT_MS },
+  });
+  auth.setCredentials({ refresh_token: cfg.refreshToken });
+  return {
+    auth,
+    sheets: google.sheets({ version: "v4", auth, timeout: GOOGLE_TIMEOUT_MS }),
+    drive: google.drive({ version: "v3", auth, timeout: GOOGLE_TIMEOUT_MS }),
+  };
+}
+
 export class SheetsGateway {
   private readonly sheets: SheetsClient;
   private readonly drive: DriveClient;
@@ -430,10 +452,9 @@ export class SheetsGateway {
       return;
     }
     if (!cfg.GOOGLE_CLIENT_ID || !cfg.GOOGLE_CLIENT_SECRET || !cfg.GOOGLE_REFRESH_TOKEN) throw new Error("Kredensial Google tidak lengkap");
-    const auth = new google.auth.OAuth2(cfg.GOOGLE_CLIENT_ID, cfg.GOOGLE_CLIENT_SECRET);
-    auth.setCredentials({ refresh_token: cfg.GOOGLE_REFRESH_TOKEN });
-    this.sheets = google.sheets({ version: "v4", auth });
-    this.drive = google.drive({ version: "v3", auth });
+    const k = klienGoogle({ clientId: cfg.GOOGLE_CLIENT_ID, clientSecret: cfg.GOOGLE_CLIENT_SECRET, refreshToken: cfg.GOOGLE_REFRESH_TOKEN });
+    this.sheets = k.sheets;
+    this.drive = k.drive;
   }
 
   private get id(): string {
@@ -542,7 +563,11 @@ export class SheetsGateway {
     const t = DASHBOARD_HOST_KONDISI;
     const r0 = t.barisPertama;
     const r1 = r0 + MAX_HOST_PENGATURAN - 1;
-    const padded = Array.from({ length: MAX_HOST_PENGATURAN }, (_, i) => rows[i]);
+    const padded: Array<KondisiRow | undefined> = Array.from({ length: MAX_HOST_PENGATURAN }, () => undefined);
+    rows.forEach((r, i) => {
+      const p = r.posisi ?? i;
+      if (p >= 0 && p < MAX_HOST_PENGATURAN) padded[p] = r;
+    });
     const sheet = q(TAB.dashboardHost);
     await this.sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: this.id,

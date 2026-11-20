@@ -6,7 +6,9 @@ import { computeTargets, targetHarianRows, type HostTarget, type TargetInputs } 
 import { addDays, toJakartaHM } from "../domain/time.js";
 import type { LedgerEntry, Report, Settings } from "../domain/types.js";
 import type { Db, OutboxOp } from "../infra/db.js";
-import { toSesiRows, type Invalid, type KondisiRow, type KoreksiRow, type SheetOp, type SheetsGateway } from "../infra/sheets.js";
+import {
+  BARIS_HOST, toSesiRows, type Invalid, type KondisiRow, type KoreksiRow, type SheetOp, type SheetsGateway,
+} from "../infra/sheets.js";
 
 /*
  * Refresh: baca input owner, terapkan koreksi dan atribusi yang disetujui, hitung ledger, target, dan rekap, lalu
@@ -47,18 +49,28 @@ export interface RefreshDeps {
   invalid: Invalid[];
 }
 
+/**
+ * Pesan pribadi untuk owner; dikirim pemanggil lewat sendCapped. `terkirim()` dipanggil setelah pesan terkirim (atau
+ * sengaja tidak dikirim: batas harian, No WA owner kosong) dan mencatat bahwa hal itu sudah dilaporkan; saat gagal
+ * kirim tidak dipanggil, sehingga refresh berikutnya mengulangnya.
+ */
+export interface PesanOwner { teks: string; /** Bebas batas pesan harian. */ wajib: boolean; terkirim: () => void }
+
 export interface RefreshResult {
   summaries: HostSummary[];
+  /** Host yang streak-nya baru dimulai dan belum dilaporkan ke owner. */
   eskalasiBaru: string[];
-  /** Pesan pribadi untuk owner (eskalasi, input owner tak valid); dikirim pemanggil lewat sendCapped. */
-  pesanOwner: string[];
+  /** Eskalasi dan input owner tak valid. */
+  pesanOwner: PesanOwner[];
   input: InputOwner;
   /** Ledger bulan `today` (jendela db.reports(bulan), termasuk hari terakhir bulan lalu). */
   ledger: LedgerEntry[];
 }
 
 const STREAK_ESKALASI = 3;
-const KV_INVALID = "invalidAktif";
+/** Input tak valid yang sudah dicatat ke Log Bot / sudah dilaporkan ke owner (kunci tab|baris|alasan, refresh terakhir). */
+const KV_INVALID_LOG = "invalidTercatat";
+const KV_INVALID_OWNER = "invalidAktif";
 
 export async function bacaInputOwner(gateway: RefreshGateway): Promise<InputOwner> {
   const settings = await gateway.readSettings();
@@ -76,7 +88,7 @@ export async function bacaInputOwner(gateway: RefreshGateway): Promise<InputOwne
 export async function refresh(deps: RefreshDeps, today: string, cadangan?: InputOwner | null): Promise<RefreshResult> {
   deps.invalid.splice(0); // sisa refresh yang gagal di tengah jalan; dibaca ulang di bawah
   let input: InputOwner;
-  let pesanInvalid: string[] = [];
+  let pesanInvalid: PesanOwner[] = [];
   try {
     input = await bacaInputOwner(deps.gateway);
     pesanInvalid = laporInvalid(deps, deps.invalid.splice(0));
@@ -119,8 +131,12 @@ function hitungRefresh(deps: Pick<RefreshDeps, "db" | "now">, input: InputOwner,
   antreBerversi(db, "kondisi", { type: "writeKondisi", rows: kondisi(summaries, input.settings) });
   antreSesi(db, entri, [...reportsLalu, ...reports]);
 
-  const eskalasiBaru = eskalasi(deps, input.settings, summaries, ledger, targets, inp, today);
-  return { summaries, eskalasiBaru, pesanOwner: eskalasiBaru.length > 0 ? [msgEskalasi(eskalasiBaru)] : [], input, ledger };
+  const baru = eskalasi(deps, input.settings, summaries, ledger, targets, inp, today);
+  const pesanOwner: PesanOwner[] = baru.length === 0 ? [] : [{
+    teks: msgEskalasi(baru.map((e) => e.host)), wajib: true,
+    terkirim: () => { for (const e of baru) db.setKv(`eskalasi:${e.host}`, e.mulai); },
+  }];
+  return { summaries, eskalasiBaru: baru.map((e) => e.host), pesanOwner, input, ledger };
 }
 
 function bangunLedger(reports: Report[], input: InputOwner): LedgerEntry[] {
@@ -230,11 +246,16 @@ function antreKredit(db: Db, bulan: string, entri: LedgerEntry[], ledger: Ledger
   antreBerversi(db, `kredit:${bulan}`, { type: "upsertKredit", rows: toKreditRows(entri, expectedOmzet(ledger, bulan)) });
 }
 
-/** Kondisi per baris DAFTAR_HOST (urutan host di Pengaturan, maksimal 10). */
+/** Kondisi per baris DAFTAR_HOST: posisi = baris host di Pengaturan − 2 (baris kosong di antaranya ikut dihitung). */
 function kondisi(summaries: HostSummary[], settings: Settings): KondisiRow[] {
-  return settings.hosts.slice(0, 10).map((h) => {
+  return settings.hosts.flatMap((h, i): KondisiRow[] => {
+    const posisi = h.row !== undefined ? h.row - BARIS_HOST.pertama : i;
+    if (posisi < 0 || posisi > BARIS_HOST.terakhir - BARIS_HOST.pertama) return [];
     const s = summaries.find((x) => x.host === h.name);
-    return { host: h.name, butuhPerHariKerja: s?.butuhPerHariKerja ?? null, disiplin: s?.disiplin ?? null, status: s ? teksStatus(s) : "" };
+    return [{
+      host: h.name, butuhPerHariKerja: s?.butuhPerHariKerja ?? null, disiplin: s?.disiplin ?? null, status: s ? teksStatus(s) : "",
+      posisi,
+    }];
   });
 }
 
@@ -258,45 +279,53 @@ function antreSesi(db: Db, entri: LedgerEntry[], reports: Report[]): void {
 /* ---------- Eskalasi dan input tak valid ---------- */
 
 /**
- * Host dengan streak ≥ 3 yang awal streak-nya belum pernah dilaporkan (kv eskalasi:<host> = tanggal awal streak).
- * Sebelum jam update pagi tidak dicatat, supaya owner tidak dikirimi pesan tengah malam.
+ * Host dengan streak ≥ 3 yang awal streak-nya belum dilaporkan (kv eskalasi:<host> = tanggal awal streak, dicatat
+ * setelah pesan terkirim). Sebelum jam update pagi tidak dilaporkan, supaya owner tidak dikirimi pesan tengah malam.
  */
 function eskalasi(
   deps: Pick<RefreshDeps, "db" | "now">, settings: Settings, summaries: HostSummary[], ledger: LedgerEntry[],
   targets: Record<string, HostTarget>, inp: TargetInputs, today: string,
-): string[] {
+): Array<{ host: string; mulai: string }> {
   const { db } = deps;
   if (toJakartaHM(deps.now()) < settings.jamPagi) return [];
-  const baru: string[] = [];
+  const baru: Array<{ host: string; mulai: string }> = [];
   for (const s of summaries) {
     const t = targets[s.host];
     if (s.streakDiBawah < STREAK_ESKALASI || !t) continue;
     const mulai = hariStreakDiBawah(s.host, ledger, t, inp, today).at(-1);
-    const k = `eskalasi:${s.host}`;
-    if (!mulai || db.getKv(k) === mulai) continue;
-    db.setKv(k, mulai);
-    baru.push(s.host);
+    if (mulai && db.getKv(`eskalasi:${s.host}`) !== mulai) baru.push({ host: s.host, mulai });
   }
   return baru;
 }
 
-/** Baris Log Bot per item baru dan satu pesan owner; item yang masih sama dengan refresh sebelumnya tidak diulang. */
-function laporInvalid(deps: Pick<RefreshDeps, "db" | "now">, items: Invalid[]): string[] {
+/**
+ * Baris Log Bot per item baru dan satu pesan owner; item yang masih sama dengan refresh sebelumnya tidak diulang.
+ * Himpunan "sudah dilaporkan ke owner" baru diganti setelah pesan terkirim (gagal kirim → diulang).
+ */
+function laporInvalid(deps: Pick<RefreshDeps, "db" | "now">, items: Invalid[]): PesanOwner[] {
   const { db } = deps;
   const kunci = (i: Invalid): string => `${i.tab}|${i.row}|${i.reason}`;
   const sekarang = [...new Map(items.map((i) => [kunci(i), i])).values()];
-  let lama: string[] = [];
-  try {
-    lama = JSON.parse(db.getKv(KV_INVALID) ?? "[]") as string[];
-  } catch {
-    lama = [];
-  }
-  const baru = sekarang.filter((i) => !lama.includes(kunci(i)));
-  db.setKv(KV_INVALID, JSON.stringify(sekarang.map(kunci)));
-  for (const i of baru) {
+  const kunciSekarang = JSON.stringify(sekarang.map(kunci));
+  const lama = (k: string): string[] => {
+    try {
+      return JSON.parse(db.getKv(k) ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  const tercatat = lama(KV_INVALID_LOG);
+  for (const i of sekarang.filter((x) => !tercatat.includes(kunci(x)))) {
     db.outbox.push({ type: "appendLog", at: deps.now(), level: "WARN", pesan: `Input owner tidak valid — ${i.tab} baris ${i.row}: ${i.reason}` });
   }
-  return baru.length > 0 ? [msgInputTidakValid(baru)] : [];
+  db.setKv(KV_INVALID_LOG, kunciSekarang);
+  const dilaporkan = lama(KV_INVALID_OWNER);
+  const baru = sekarang.filter((i) => !dilaporkan.includes(kunci(i)));
+  if (baru.length === 0) {
+    db.setKv(KV_INVALID_OWNER, kunciSekarang);
+    return [];
+  }
+  return [{ teks: msgInputTidakValid(baru), wajib: false, terkirim: () => db.setKv(KV_INVALID_OWNER, kunciSekarang) }];
 }
 
 const pesanError = (e: unknown): string => (e instanceof Error ? e.message : String(e));
