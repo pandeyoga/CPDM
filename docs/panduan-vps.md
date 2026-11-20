@@ -102,7 +102,7 @@ cd ~/cp-sistem/deploy
 cp .env.example .env && chmod 600 .env
 ```
 
-Buat tiga rahasia acak. Jalankan perintah ini **dua kali** (dua rahasia 64 karakter: `WAHA_API_KEY` dan `WAHA_HMAC_KEY`), dan catat tiap hasilnya di tempat aman (mis. pengelola sandi) untuk dimasukkan ke `.env`:
+Anda perlu dua kunci acak dan satu sandi dashboard. Untuk dua kunci (`WAHA_API_KEY` dan `WAHA_HMAC_KEY`), jalankan perintah ini **dua kali** (tiap hasilnya 64 karakter) dan catat tiap hasilnya di tempat aman (mis. pengelola sandi) untuk dimasukkan ke `.env`:
 
 ```bash
 openssl rand -hex 32
@@ -323,11 +323,11 @@ npm ci --ignore-scripts && npm run build
 Jalankan program login. Rahasia diketik lewat isian tersembunyi (tidak tersimpan di riwayat perintah). **Mac/Linux** (tiga perintah, satu per satu):
 
 ```bash
-read -rs -p "Client ID: " GOOGLE_CLIENT_ID && export GOOGLE_CLIENT_ID
+printf 'Client ID: '; read -rs GOOGLE_CLIENT_ID; echo; export GOOGLE_CLIENT_ID
 ```
 
 ```bash
-read -rs -p "Client secret: " GOOGLE_CLIENT_SECRET && export GOOGLE_CLIENT_SECRET
+printf 'Client secret: '; read -rs GOOGLE_CLIENT_SECRET; echo; export GOOGLE_CLIENT_SECRET
 ```
 
 ```bash
@@ -438,7 +438,7 @@ Nama host = nama yang akan ditulis di caption foto. Tulis tanpa spasi di awal/ak
 
 ## 9. Jalankan bot
 
-Pastikan semua variabel di `.env` terisi (tidak ada yang bernilai `GANTI...`), lalu buat folder data milik pengguna Docker bot (uid 1000):
+Sampai langkah ini hanya WAHA yang berjalan; bot baru dinyalakan di sini, setelah `LIVE_GROUP_ID` (langkah 4d) dan semua variabel lain di `.env` terisi (tidak ada yang bernilai `GANTI...`), lalu buat folder data milik pengguna Docker bot (uid 1000):
 
 ```bash
 cd ~/cp-sistem/deploy && mkdir -p data && sudo chown -R 1000:1000 data

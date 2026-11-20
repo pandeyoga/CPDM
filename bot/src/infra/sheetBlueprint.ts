@@ -294,10 +294,10 @@ export function spreadsheetPropsRequest(): Request {
   return { updateSpreadsheetProperties: { properties: { timeZone: ZONA_WAKTU, locale: LOCALE }, fields: "timeZone,locale" } };
 }
 
-/** Anggaran sel Google Sheets: 10 juta sel per spreadsheet; 5 tab fakta ≈ 100.000 baris × <15 kolom, jauh di bawah batas. */
 /**
  * Jumlah baris minimum tab fakta. Sheets menolak values.update di luar grid (bawaan 1.000 baris), sedangkan Data
- * Kredit bertambah ±800 baris per bulan.
+ * Kredit bertambah ±800 baris per bulan. Anggaran sel: batas 10 juta sel per spreadsheet; 5 tab fakta ≈ 100.000
+ * baris × <15 kolom, jauh di bawah batas.
  */
 export const MIN_BARIS_TAB: Readonly<Record<string, number>> = {
   [TAB.dataKredit]: 50_000, [TAB.targetHarian]: 5_000, [TAB.sesi]: 20_000, [TAB.log]: 20_000, [TAB.koreksi]: 5_000,
