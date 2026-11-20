@@ -119,8 +119,10 @@ export function fakeGateway(invalid: Invalid[]) {
       if (g.gagalApply) throw g.gagalApply;
       g.applied.push(op);
     },
+    gagalUpload: null as Error | null,
     async uploadBukti(buf: Buffer, name: string) {
       if (g.gagalApply) throw g.gagalApply;
+      if (g.gagalUpload) throw g.gagalUpload;
       g.uploads.push({ name, size: buf.length });
       return `https://drive.google.com/file/d/${name}/view`;
     },

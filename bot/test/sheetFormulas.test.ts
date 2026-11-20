@@ -266,7 +266,8 @@ describe("kolom tabel fakta", { timeout: 60_000 }, () => {
 });
 
 describe("rumus hanya memakai fungsi yang diizinkan", { timeout: 60_000 }, () => {
-  const BOLEH = new Set(["SUMIFS", "COUNTIFS", "IF", "IFERROR", "MIN", "MAX", "DATE", "EOMONTH", "WEEKDAY", "INDEX", "MATCH", "AND", "OR"]);
+  // TRIM ditambahkan untuk nama host DAFTAR_HOST (M4, final review); didukung Google Sheets dan HyperFormula.
+  const BOLEH = new Set(["SUMIFS", "COUNTIFS", "IF", "IFERROR", "MIN", "MAX", "DATE", "EOMONTH", "WEEKDAY", "INDEX", "MATCH", "AND", "OR", "TRIM"]);
 
   it.each(LAYOUTS)("%s", (tab) => {
     const rumus = Object.entries(dashboardFormulas(tab));
@@ -628,5 +629,17 @@ describe("dashboard dihitung dari Data Kredit dan Target Harian (fixture mockup)
       }
       expect(diperiksa).toBeGreaterThan(20);
     }
+  });
+});
+
+describe("M4: nama host di DAFTAR_HOST dengan spasi berlebih tetap cocok", { timeout: 60_000 }, () => {
+  it("'  Brando ' di Pengaturan → nama dan realisasi Kontrol sama dengan 'Brando'", () => {
+    const buku = buatBuku(["Kontrol"]);
+    const sebelum = buku.get("Kontrol", "B2");
+    expect(sebelum).toBeTypeOf("number");
+    expect(sebelum as number).toBeGreaterThan(0);
+    buku.set("Pengaturan", "A1", "  Brando ");
+    expect(buku.get("Kontrol", "A2")).toBe("Brando");
+    expect(buku.get("Kontrol", "B2")).toBe(sebelum);
   });
 });

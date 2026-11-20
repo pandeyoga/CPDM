@@ -138,7 +138,8 @@ const rasio = (a: KolomKredit, b: KolomKredit, s: readonly Syarat[]): string => 
 /** =IF(salah satu kondisi kosong,"",expr) */
 const kecuali = (kosong: string[], expr: string): string =>
   `=IF(${kosong.length === 1 ? `${kosong[0]}=""` : `OR(${kosong.map((k) => `${k}=""`).join(",")})`},"",${expr})`;
-const namaHost = (i: number): string => `=IFERROR(INDEX(DAFTAR_HOST,${i})&"","")`;
+/** Nama host ke-i DAFTAR_HOST, TRIM: spasi berlebih di Pengaturan tidak membuat kriteria SUMIFS meleset (bot memangkas nama). */
+const namaHost = (i: number): string => `=IFERROR(TRIM(INDEX(DAFTAR_HOST,${i})&""),"")`;
 
 // ---------- Filter periode (logika sama dengan periodRange / comparisonRange) ----------
 

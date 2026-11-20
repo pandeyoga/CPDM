@@ -30,7 +30,7 @@ function setup(awal: Date) {
 
 const ringkasan = (r: Awaited<ReturnType<typeof refresh>>, host: string) => r.summaries.find((s) => s.host === host)!;
 const kreditTerakhir = (ops: OutboxOp[], bulan: string): KreditRow[] | undefined =>
-  (ops.filter((o) => o.type === "upsertKredit") as unknown as Array<{ rows: KreditRow[] }>)
+  (ops.filter((o) => o.type === "writeKredit") as unknown as Array<{ rows: KreditRow[] }>)
     .map((o) => o.rows).filter((rows) => rows.every((r) => r.tanggal.startsWith(bulan))).at(-1);
 const jumlahOmzet = (rows: KreditRow[], host?: string): number =>
   rows.filter((r) => host === undefined || r.host === host).reduce((a, r) => a + (r.omzet ?? 0), 0);
@@ -157,7 +157,7 @@ describe("refresh: operasi tulis", () => {
     await refresh(s.deps, "2026-11-20");
     const ops = s.opsBaru();
     expect(ops.map((o) => [o.type, o.month ?? ""]).sort()).toEqual([
-      ["upsertKredit", ""], ["writeKondisi", ""], ["writeTargetHarian", "2026-10"], ["writeTargetHarian", "2026-11"],
+      ["writeKondisi", ""], ["writeKredit", "2026-11"], ["writeTargetHarian", "2026-10"], ["writeTargetHarian", "2026-11"],
     ]);
     const kondisi = ops.find((o) => o.type === "writeKondisi")!.rows as Array<{ host: string; status: string; posisi: number }>;
     expect(kondisi.map((k) => [k.host, k.posisi])).toEqual([["Brando", 0], ["Vanna", 1], ["Linda", 2]]);
@@ -184,7 +184,7 @@ describe("refresh: operasi tulis", () => {
     await refresh(s.deps, "2026-11-20");
     const ubah = s.opsBaru();
     expect(ubah.filter((o) => o.type === "writeTargetHarian").map((o) => o.month)).toEqual(["2026-11"]);
-    expect(ubah.some((o) => o.type === "upsertKredit")).toBe(false);
+    expect(ubah.some((o) => o.type === "writeKredit")).toBe(false);
   });
 
   it("pergantian bulan: laporan 1/12 00:10 masuk Data Kredit November; koreksi bulan lalu mengantrekan ulang November", async () => {
@@ -198,7 +198,7 @@ describe("refresh: operasi tulis", () => {
     const nov = kreditTerakhir(ops, "2026-11")!;
     expect(jumlahOmzet(nov)).toBeCloseTo(500_000, 6); // irisan per jam
     expect(new Set(nov.map((k) => k.messageId))).toEqual(new Set(["m1", "m2"]));
-    expect(ops.filter((o) => o.type === "upsertKredit")).toHaveLength(1); // Desember belum punya entri
+    expect(ops.filter((o) => o.type === "writeKredit")).toHaveLength(1); // Desember belum punya entri
 
     s.g.koreksi = [{ messageId: "m2", platform: "shopee", field: "omzet", value: 550_000 }];
     await refresh(s.deps, "2026-12-01");

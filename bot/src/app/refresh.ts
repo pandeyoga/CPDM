@@ -277,10 +277,10 @@ export function sinkron(db: Db, kunci: string): boolean {
   return db.getKv(`versi:${kunci}`) === db.getKv(`versi:${kunci}:terapan`);
 }
 
-/** Data Kredit satu bulan: semua entri bulan itu (upsert messageId|platform|host|jam); hanya kalau berubah. */
+/** Data Kredit satu bulan: semua entri bulan itu (blok bulan itu di sheet diganti); hanya kalau berubah. */
 function antreKredit(db: Db, bulan: string, entri: LedgerEntry[], ledger: LedgerEntry[]): void {
   if (entri.length === 0) return;
-  antreBerversi(db, `kredit:${bulan}`, { type: "upsertKredit", rows: toKreditRows(entri, expectedOmzet(ledger, bulan)) });
+  antreBerversi(db, `kredit:${bulan}`, { type: "writeKredit", month: bulan, rows: toKreditRows(entri, expectedOmzet(ledger, bulan)) });
 }
 
 /** Kondisi per baris DAFTAR_HOST: posisi = baris host di Pengaturan − 2 (baris kosong di antaranya ikut dihitung). */

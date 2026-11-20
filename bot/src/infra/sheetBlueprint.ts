@@ -159,9 +159,9 @@ const hostDariDaftar = (range: string): Validation => ({ range, kind: "range", f
 const KEPUTUSAN = ["Menunggu", "Setujui", "Tolak"];
 const KEPUTUSAN_LAIN = ["Menunggu", "Disetujui", "Ditolak"];
 
-/** Nama host: tolak * ? ~ (karakter pola SUMIFS) dan awalan < > = (operator kriteria). */
+/** Nama host: tanpa spasi di awal/akhir atau ganda (TRIM); tolak * ? ~ (karakter pola SUMIFS) dan awalan < > = (operator kriteria). */
 const FORMULA_NAMA_HOST =
-  '=AND(ISERROR(FIND("*",G2)),ISERROR(FIND("?",G2)),ISERROR(FIND("~",G2)),OR(LEN(G2)=0,ISERROR(FIND(LEFT(G2,1),"<>="))))';
+  '=AND(G2=TRIM(G2),ISERROR(FIND("*",G2)),ISERROR(FIND("?",G2)),ISERROR(FIND("~",G2)),OR(LEN(G2)=0,ISERROR(FIND(LEFT(G2,1),"<>="))))';
 
 function pengaturan(): TabBlueprint {
   const values: Record<string, CellValue> = {};
@@ -185,7 +185,7 @@ function pengaturan(): TabBlueprint {
     validations: [
       { range: `B${baris(K.jadwalAktif)}`, kind: "list", values: ["YA", "TIDAK"] },
       { range: `G${BARIS_HOST.pertama}:G${BARIS_HOST.terakhir}`, kind: "custom", formula: FORMULA_NAMA_HOST,
-        pesan: "Nama host tidak boleh mengandung * ? ~ atau diawali < > =" },
+        pesan: "Nama host tanpa spasi di awal/akhir, tidak boleh mengandung * ? ~ atau diawali < > =" },
       { range: `I${BARIS_HOST.pertama}:J${BARIS_HOST.terakhir}`, kind: "date" },
     ],
     formats: [

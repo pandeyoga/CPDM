@@ -48,6 +48,7 @@ describe("sheetBlueprint", () => {
     const host = p.validations!.find((v) => v.range === "G2:G11")!;
     expect(host.kind).toBe("custom");
     expect(host.formula).toContain('FIND("*",G2)');
+    expect(host.formula).toContain("G2=TRIM(G2)"); // M4: tanpa spasi di awal/akhir atau ganda
     expect(p.defaults![`B${baris}`]).toBe("TIDAK");
     expect(p.defaults!.B7).toBe(240);
     expect(p.defaults!.B8).toBe(6);

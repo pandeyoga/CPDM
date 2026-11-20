@@ -45,6 +45,8 @@ const CATCH_UP_MUNDUR_MS = 5 * MENIT_MS;
 const BATAS_PESAN_BAWAAN = 6;
 const SELISIH_MAKS_RP = 1;
 const BATCH_ANTREAN = 50;
+/** Setelah sekian kali gagal unggah, Sesi Live ditulis tanpa tautan bukti (tautan ditambahkan kalau unggahan berhasil). */
+const BATAS_GAGAL_BUKTI = 5;
 const KV_INPUT = "inputOwner";
 const KV_OWNER_TERTUNDA = "ownerTertunda";
 /** Awal celah pesan yang belum di-catch-up (ISO); "" = tidak ada celah. */
@@ -298,6 +300,7 @@ async function jalankanAntrean(rt: Runtime): Promise<void> {
     } catch (e) {
       db.outbox.fail(item.id);
       console.error(`antrean: ${item.op.type} #${item.id} gagal (percobaan ${item.attempts + 1}): ${pesanError(e)}`);
+      if (item.op.type === "uploadBukti" && item.attempts + 1 >= BATAS_GAGAL_BUKTI) buktiTanpaTautan(rt, item.op as unknown as UploadBuktiOp);
     }
   }
 }
@@ -310,22 +313,42 @@ async function jalankanOp(rt: Runtime, op: OpBerversi): Promise<void> {
   catatTerapan(db, op);
 }
 
+const kvBuktiTertunda = (messageId: string): string => `buktiTertunda:${messageId}`;
+
 /**
  * Dedupe per messageId (kv bukti:<messageId> sudah ada → lewati); berkas hilang → "" (Sesi Live tanpa tautan).
- * Setelah terunggah berkas lokal dihapus, kecuali masih dirujuk gambar tertunda.
+ * Unggahan yang dulu gagal ≥ 5 kali (Sesi Live sudah ditulis tanpa tautan) tetap dicoba; berhasil → tautan
+ * ditambahkan ke baris Sesi Live itu. Setelah terunggah berkas lokal dihapus, kecuali masih dirujuk gambar tertunda.
  */
 async function unggahBukti(rt: Runtime, op: UploadBuktiOp): Promise<void> {
   const { db, gateway } = rt.deps;
   const k = `bukti:${op.messageId}`;
-  if (db.getKv(k) !== null) return;
+  const susulan = db.getKv(kvBuktiTertunda(op.messageId)) === "1";
+  if (db.getKv(k) !== null && !susulan) return;
   if (!existsSync(op.path)) {
-    db.setKv(k, "");
+    if (susulan) db.setKv(kvBuktiTertunda(op.messageId), "");
+    else db.setKv(k, "");
     catatLog(rt, "WARN", `Bukti ${op.messageId} tidak diunggah: berkas lokal tidak ada`);
     return;
   }
-  db.setKv(k, await gateway.uploadBukti(readFileSync(op.path), basename(op.path)));
+  const link = await gateway.uploadBukti(readFileSync(op.path), basename(op.path));
+  db.setKv(k, link);
+  if (susulan) {
+    db.setKv(kvBuktiTertunda(op.messageId), "");
+    db.outbox.push({ type: "linkBuktiSesi", messageId: op.messageId, link } satisfies SheetOp);
+  }
   const tertunda = [...db.pendingExtract.all(), ...db.pendingCaption.all()].some((p) => p.msgId === op.messageId);
   if (!tertunda) rmSync(op.path, { force: true });
+}
+
+/** Unggahan gagal ≥ 5 kali: Sesi Live boleh ditulis tanpa tautan (kv bukti "" ), Log Bot sekali; antrean tetap mencoba. */
+function buktiTanpaTautan(rt: Runtime, op: UploadBuktiOp): void {
+  const { db } = rt.deps;
+  const k = `bukti:${op.messageId}`;
+  if (db.getKv(k) !== null) return;
+  db.setKv(k, "");
+  db.setKv(kvBuktiTertunda(op.messageId), "1");
+  catatLog(rt, "WARN", `Bukti ${op.messageId} belum terunggah setelah ${BATAS_GAGAL_BUKTI} percobaan; Sesi Live ditulis tanpa tautan, tautan ditambahkan kalau unggahan berhasil`);
 }
 
 /** Operasi tersimpan sebagai JSON: buang penanda versi, pulihkan Date. */

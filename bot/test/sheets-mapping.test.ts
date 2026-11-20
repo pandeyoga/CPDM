@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { KREDIT_COLUMNS } from "../src/domain/sheetFormulas.js";
 import type { KreditRow } from "../src/domain/rekap.js";
 import type { LedgerEntry } from "../src/domain/types.js";
+import { serialTanggal } from "../src/domain/sheetFormulas.js";
 import {
-  fromSettingsRows, GOOGLE_TIMEOUT_MS, klienGoogle, mergeKredit, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
-  parseJadwalRows, parseKehadiranRows, parseKoreksiMenunggu, parseKoreksiRows, mergeTargetHarian, tailClearRange, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
-  type SheetOp,
+  fromSettingsRows, GOOGLE_TIMEOUT_MS, klienGoogle, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
+  parseJadwalRows, parseKehadiranRows, parseKoreksiMenunggu, parseKoreksiRows, rencanaBlokBulan, SheetsGateway, toKreditSheetRows,
+  toSesiRows, toTargetHarianRows, type SheetOp,
 } from "../src/infra/sheets.js";
 
 const hosts = [{ name: "Brando" }, { name: "Vanna" }, { name: "Linda" }];
@@ -125,16 +126,6 @@ describe("toKreditSheetRows / toTargetHarianRows", () => {
   });
 });
 
-describe("mergeKredit", () => {
-  it("ganti kunci sama, buang baris basi, tambah baru", () => {
-    const existing = toKreditSheetRows([
-      kredit({ jam: 11, omzet: 1 }), kredit({ jam: 12, omzet: 2 }), kredit({ messageId: "m9", omzet: 9 }),
-    ]);
-    const merged = mergeKredit(existing, [kredit({ jam: 12, omzet: 20 }), kredit({ jam: 13, omzet: 30 })]);
-    expect(merged.map((r) => [r[0], r[2], r[6]])).toEqual([["m1", 12, 20], ["m9", 12, 9], ["m1", 13, 30]]);
-  });
-});
-
 describe("parser tab owner", () => {
   it("koreksi dan atribusi", () => {
     const rows: unknown[][] = [
@@ -181,16 +172,6 @@ describe("parser tab owner", () => {
   });
 });
 
-describe("fungsi murni tabel", () => {
-  it("mergeTargetHarian dan tailClearRange", () => {
-    const old = [[46300, "A", 1, 0, ""], [46346, "A", 1, 0, ""], ["x", "A", 1, 0, ""]];
-    expect(mergeTargetHarian(old, "2026-11", [])).toEqual([old[0], old[2]]);
-    expect(tailClearRange("T", 5, 2, 5)).toBe("'T'!A4:E6");
-    expect(tailClearRange("T", 5, 5, 5)).toBeNull();
-    expect(tailClearRange("T", 5, 0, 1)).toBe("'T'!A2:E2");
-  });
-});
-
 describe("apply dispatch", () => {
   function fakeSheets(rows: unknown[][] = [["m1", 46346, 11, "Jum–Min", "Brando", "tiktok"]]): { sheets: never; calls: Array<[string, unknown]> } {
     const calls: Array<[string, unknown]> = [];
@@ -211,32 +192,6 @@ describe("apply dispatch", () => {
     await gw(sheets).apply({ type: "appendSesi", rows: [[1, "a"]] } satisfies SheetOp);
     expect(calls[0]?.[0]).toBe("append");
     expect(calls[0]?.[1]).toMatchObject({ spreadsheetId: "SS", range: "'Sesi Live'!A:A", valueInputOption: "RAW", requestBody: { values: [[1, "a"]] } });
-  });
-  it("upsertKredit menulis ulang tabel dan menghapus ekor", async () => {
-    const { sheets, calls } = fakeSheets();
-    await gw(sheets).apply({ type: "upsertKredit", rows: [kredit({ jam: 12 })] });
-    expect(calls.map((c) => c[0])).toEqual(["get", "update"]);
-    expect(calls[1]?.[1]).toMatchObject({ range: "'Data Kredit'!A2", valueInputOption: "RAW" });
-  });
-  it("upsertKredit: baris tertulis dan rentang clear tepat", async () => {
-    const lama = toKreditSheetRows([kredit({ jam: 11, omzet: 1 }), kredit({ jam: 12, omzet: 2 }), kredit({ messageId: "m9", omzet: 9 })]);
-    const { sheets, calls } = fakeSheets(lama as unknown[][]);
-    await gw(sheets).apply({ type: "upsertKredit", rows: [kredit({ jam: 12, omzet: 20 })] });
-    expect(calls.map((c) => c[0])).toEqual(["get", "update", "clear"]);
-    expect(calls[0]?.[1]).toMatchObject({ range: "'Data Kredit'!A2:P" });
-    const u = calls[1]?.[1] as { requestBody: { values: unknown[][] } };
-    expect(u.requestBody.values.map((r) => [r[0], r[2], r[6]])).toEqual([["m1", 12, 20], ["m9", 12, 9]]);
-    expect(calls[2]?.[1]).toMatchObject({ range: "'Data Kredit'!A4:P4" });
-  });
-  it("writeTargetHarian: bulan lain dipertahankan, bulan ini diganti, ekor dihapus", async () => {
-    const okt = [46300, "Brando", 5, 0, ""]; // 2026-10-05
-    const nov1 = [46346, "Brando", 1, 0, ""];
-    const nov2 = [46347, "Brando", 1, 0, ""];
-    const { sheets, calls } = fakeSheets([okt, nov1, nov2]);
-    await gw(sheets).apply({ type: "writeTargetHarian", month: "2026-11", rows: [{ tanggal: "2026-11-20", host: "Brando", target: 9, gugur: 0, sebab: "" }] });
-    expect(calls.map((c) => c[0])).toEqual(["get", "update", "clear"]);
-    expect((calls[1]?.[1] as { requestBody: { values: unknown[][] } }).requestBody.values).toEqual([okt, [46346, "Brando", 9, 0, ""]]);
-    expect(calls[2]?.[1]).toMatchObject({ range: "'Target Harian'!A4:E4" });
   });
   it("writeHeartbeat dan appendLog", async () => {
     const { sheets, calls } = fakeSheets();
@@ -264,6 +219,7 @@ describe("apply dispatch", () => {
     expect((calls[0]?.[1] as { requestBody: { values: unknown[][] } }).requestBody.values[0]).toEqual([46346, "Linda", "Koreksi", "1", "2", "Menunggu", "", "m1", "shopee", "koreksi", "omzet", 2]);
     await g.apply({ type: "writeTargetHarian", month: "2026-11", rows: [{ tanggal: "2026-11-20", host: "Brando", target: 1, gugur: 0, sebab: "" }] });
     expect(calls.at(-1)?.[0]).toBe("update");
+    expect(calls.map((c) => c[0])).not.toContain("clear");
   });
 });
 
@@ -370,5 +326,164 @@ describe("I6: Data Jadwal dari file jadwal asli", () => {
     const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F", JADWAL_SPREADSHEET_ID: "JJ" }, { sheets, drive: {} as never });
     expect(await g.readJadwal()).toHaveLength(3);
     expect(calls).toEqual([expect.objectContaining({ spreadsheetId: "JJ", range: "'Data Jadwal'!A:Z" })]);
+  });
+});
+
+/* ---------- I7: tulis ulang per bulan (Data Kredit, Target Harian) ---------- */
+
+/** Spreadsheet palsu dengan semantik values.get/update Sheets: baris/sel kosong di ekor dipangkas, "" mengosongkan sel. */
+function gridPalsu(awal: Record<string, unknown[][]>) {
+  const tabs = new Map(Object.entries(awal).map(([t, rows]) => [t, rows.map((r) => [...r])]));
+  const calls: Array<{ op: string; range: string; rows?: number }> = [];
+  const kol = (c: string): number => [...c].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  const urai = (range: string) => {
+    const m = /^'([^']+)'!([A-Z]+)(\d+)(?::([A-Z]+)(\d+)?)?$/.exec(range);
+    if (!m) throw new Error(`rentang ${range}`);
+    return { tab: m[1]!, c0: kol(m[2]!), r0: Number(m[3]) - 1, c1: m[4] ? kol(m[4]) : undefined, r1: m[5] ? Number(m[5]) - 1 : undefined };
+  };
+  const kosong = (v: unknown): boolean => v === undefined || v === null || v === "";
+  const sheets = { spreadsheets: { values: {
+    get: async (p: { range: string }) => {
+      calls.push({ op: "get", range: p.range });
+      const { tab, c0, r0, c1, r1 } = urai(p.range);
+      const grid = tabs.get(tab) ?? [];
+      const out: unknown[][] = [];
+      for (let r = r0; r <= (r1 ?? grid.length - 1); r++) {
+        const row = (grid[r] ?? []).slice(c0, c1 === undefined ? undefined : c1 + 1);
+        while (row.length > 0 && kosong(row.at(-1))) row.pop();
+        out.push(row);
+      }
+      while (out.length > 0 && out.at(-1)!.length === 0) out.pop();
+      return { data: { values: out } };
+    },
+    update: async (p: { range: string; requestBody: { values: unknown[][] } }) => {
+      calls.push({ op: "update", range: p.range, rows: p.requestBody.values.length });
+      const { tab, c0, r0 } = urai(p.range);
+      const grid = tabs.get(tab) ?? [];
+      p.requestBody.values.forEach((row, i) => {
+        const tujuan = (grid[r0 + i] ??= []);
+        row.forEach((v, j) => { tujuan[c0 + j] = v === "" ? undefined : v; });
+      });
+      tabs.set(tab, grid);
+      return {};
+    },
+    clear: async (p: { range: string }) => { calls.push({ op: "clear", range: p.range }); return {}; },
+  } } };
+  /** Baris data (tanpa header), baris kosong dibuang. */
+  const isi = (tab: string): unknown[][] =>
+    (tabs.get(tab) ?? []).slice(1).map((r) => r.map((v) => v ?? "")).filter((r) => r.some((v) => v !== ""));
+  return { sheets: sheets as never, calls, isi, tabs };
+}
+
+describe("I7: rencanaBlokBulan", () => {
+  const t = (d: string): number => serialTanggal(d);
+  const OKT = [t("2026-10-01"), t("2026-10-15"), t("2026-10-31")];
+  const NOV = [t("2026-11-01"), t("2026-11-02")];
+  it("tabel kosong → blok di awal", () => {
+    expect(rencanaBlokBulan([], "2026-11", 3)).toEqual({ jenis: "blok", mulai: 0, panjangLama: 0 });
+  });
+  it("bulan terakhir tumbuh → blok (tanpa geser)", () => {
+    expect(rencanaBlokBulan([...OKT, ...NOV], "2026-11", 5)).toEqual({ jenis: "blok", mulai: 3, panjangLama: 2 });
+  });
+  it("bulan di tengah menyusut → blok, diisi baris kosong sepanjang blok lama", () => {
+    expect(rencanaBlokBulan([...OKT, ...NOV], "2026-10", 2)).toEqual({ jenis: "blok", mulai: 0, panjangLama: 3 });
+  });
+  it("bulan di tengah tumbuh → geser ekor; baris kosong sisa bulan itu dipakai dulu", () => {
+    expect(rencanaBlokBulan([...OKT, ...NOV], "2026-10", 4)).toEqual({ jenis: "geser", mulai: 0, panjangLama: 3, ekor: 3 });
+    expect(rencanaBlokBulan([...OKT, "", ...NOV], "2026-10", 4)).toEqual({ jenis: "blok", mulai: 0, panjangLama: 4 });
+  });
+  it("bulan baru di antara bulan lain → geser di posisi bulan berikutnya; tidak urut → tulis ulang penuh", () => {
+    expect(rencanaBlokBulan([...OKT, t("2026-12-01")], "2026-11", 2)).toEqual({ jenis: "geser", mulai: 3, panjangLama: 0, ekor: 3 });
+    expect(rencanaBlokBulan([t("2026-11-01"), t("2026-10-01")], "2026-10", 1)).toEqual({ jenis: "penuh" });
+  });
+});
+
+describe("I7: writeKredit / writeTargetHarian menulis satu blok bulan", () => {
+  const H = KREDIT_COLUMNS.map((c) => c.header);
+  const baris = (id: string, tanggal: string, omzet = 100): KreditRow => kredit({ messageId: id, tanggal, omzet });
+  const sel = (r: KreditRow): unknown[] => toKreditSheetRows([r])[0]!.map((v) => v);
+  const SEP = [baris("s1", "2026-09-10"), baris("s2", "2026-09-30")];
+  const OKT = [baris("o1", "2026-10-01"), baris("o2", "2026-10-15"), baris("o3", "2026-10-31")];
+  const NOV = [baris("n1", "2026-11-01"), baris("n2", "2026-11-20")];
+  const awal = (): Record<string, unknown[][]> => ({ "Data Kredit": [H, ...[...SEP, ...OKT, ...NOV].map(sel)] });
+  const gw = (sheets: never): SheetsGateway => new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets, drive: {} as never });
+  const id = (rows: unknown[][]): unknown[] => rows.map((r) => r[0]);
+
+  it("bulan lama menyusut: hanya kolom tanggal dibaca, satu update berisi blok + baris kosong, bulan lain tidak tersentuh", async () => {
+    const f = gridPalsu(awal());
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-10", rows: [baris("o9", "2026-10-20", 900)] });
+    expect(f.calls).toEqual([
+      { op: "get", range: "'Data Kredit'!B2:B" },
+      { op: "update", range: "'Data Kredit'!A4", rows: 3 },
+    ]);
+    expect(id(f.isi("Data Kredit"))).toEqual(["s1", "s2", "o9", "n1", "n2"]);
+  });
+
+  it("bulan berjalan tumbuh di ujung tabel: satu baca kolom + satu update; diulang (retry) tidak membuat duplikat", async () => {
+    const f = gridPalsu(awal());
+    const op: SheetOp = { type: "writeKredit", month: "2026-11", rows: [...NOV, baris("n3", "2026-11-21"), baris("n0", "2026-11-05")] };
+    await gw(f.sheets).apply(op);
+    await gw(f.sheets).apply(op);
+    expect(f.calls.map((c) => c.op)).toEqual(["get", "update", "get", "update"]);
+    expect(id(f.isi("Data Kredit"))).toEqual(["s1", "s2", "o1", "o2", "o3", "n1", "n0", "n2", "n3"]); // urut tanggal
+  });
+
+  it("bulan di tengah tumbuh: ekor (bulan sesudahnya) digeser utuh; baris kosong sisa penyusutan dipakai lagi", async () => {
+    const f = gridPalsu(awal());
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-10", rows: OKT.slice(0, 1) });
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-10", rows: [...OKT, baris("o4", "2026-10-31")] });
+    expect(id(f.isi("Data Kredit"))).toEqual(["s1", "s2", "o1", "o2", "o3", "o4", "n1", "n2"]);
+    const isi = f.isi("Data Kredit");
+    expect(isi.at(-1)).toEqual(sel(NOV[1]!).map((v) => v ?? ""));
+    expect(f.calls.map((c) => c.op)).not.toContain("clear");
+  });
+
+  it("Target Harian: blok bulan diganti dalam satu update, urut tanggal; bulan lain tetap", async () => {
+    const th = (tanggal: string, host: string, target: number): unknown[] => [serialTanggal(tanggal), host, target, 0, ""];
+    const f = gridPalsu({ "Target Harian": [["Tanggal", "Host", "Target", "Gugur", "Sebab"],
+      th("2026-10-31", "Brando", 5), th("2026-11-01", "Brando", 1), th("2026-11-01", "Vanna", 1), th("2026-11-02", "Brando", 1)] });
+    await gw(f.sheets).apply({ type: "writeTargetHarian", month: "2026-11", rows: [
+      { tanggal: "2026-11-01", host: "Brando", target: 2, gugur: 0, sebab: "" },
+      { tanggal: "2026-11-02", host: "Brando", target: 2, gugur: 0, sebab: "" },
+      { tanggal: "2026-11-01", host: "Vanna", target: 3, gugur: 0, sebab: "" },
+    ] });
+    expect(f.calls).toEqual([{ op: "get", range: "'Target Harian'!A2:A" }, { op: "update", range: "'Target Harian'!A3", rows: 3 }]);
+    expect(f.isi("Target Harian")).toEqual([
+      th("2026-10-31", "Brando", 5), th("2026-11-01", "Brando", 2), th("2026-11-01", "Vanna", 3), th("2026-11-02", "Brando", 2),
+    ]);
+  });
+});
+
+describe("I7: tabel lama yang tidak urut", () => {
+  it("ditulis ulang penuh sekali (urut tanggal, bulan lain dipertahankan, tanpa duplikat); sesudahnya per blok", async () => {
+    const th = (tanggal: string, host: string, target: number): unknown[] => [serialTanggal(tanggal), host, target, 0, ""];
+    const f = gridPalsu({ "Target Harian": [["Tanggal", "Host", "Target", "Gugur", "Sebab"],
+      th("2026-11-01", "Brando", 1), th("2026-11-02", "Brando", 1), th("2026-10-31", "Brando", 5), th("2026-11-01", "Vanna", 1)] });
+    const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets: f.sheets, drive: {} as never });
+    const op: SheetOp = { type: "writeTargetHarian", month: "2026-11", rows: [{ tanggal: "2026-11-01", host: "Brando", target: 2, gugur: 0, sebab: "" }] };
+    await g.apply(op);
+    expect(f.isi("Target Harian")).toEqual([th("2026-10-31", "Brando", 5), th("2026-11-01", "Brando", 2)]);
+    expect(f.calls.map((c) => c.op)).toEqual(["get", "get", "update"]);
+    await g.apply(op);
+    expect(f.isi("Target Harian")).toEqual([th("2026-10-31", "Brando", 5), th("2026-11-01", "Brando", 2)]);
+    expect(f.calls.slice(3)).toEqual([{ op: "get", range: "'Target Harian'!A2:A" }, { op: "update", range: "'Target Harian'!A3", rows: 1 }]);
+  });
+});
+
+describe("M9: tautan bukti ditambahkan ke baris Sesi Live yang sudah ada", () => {
+  it("linkBuktiSesi mengisi kolom Bukti baris dengan ID Pesan itu", async () => {
+    const calls: Array<{ requestBody: { valueInputOption: string; data: Array<{ range: string; values: unknown[][] }> } }> = [];
+    const sheets = { spreadsheets: { values: {
+      get: async (p: { range: string }) => {
+        expect(p.range).toBe("'Sesi Live'!K2:K");
+        return { data: { values: [["m0"], ["m1"], [], ["m1"]] } };
+      },
+      batchUpdate: async (p: (typeof calls)[number]) => { calls.push(p); return {}; },
+    } } } as never;
+    const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets, drive: {} as never });
+    await g.apply({ type: "linkBuktiSesi", messageId: "m1", link: "https://drive/x" });
+    expect(calls[0]!.requestBody).toEqual({ valueInputOption: "RAW", data: [
+      { range: "'Sesi Live'!J3", values: [["https://drive/x"]] }, { range: "'Sesi Live'!J5", values: [["https://drive/x"]] },
+    ] });
   });
 });

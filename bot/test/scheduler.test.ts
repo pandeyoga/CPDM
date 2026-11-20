@@ -479,6 +479,49 @@ describe("antrean ke Sheets", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it("M9: unggah bukti gagal 5 kali → Sesi Live tanpa tautan + Log Bot sekali; unggahan berhasil kemudian menautkan baris itu", async () => {
+    const s = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    jam(J("2026-11-20", "10:30"));
+    const dir = join(s.dir, "bukti");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "m1.jpg");
+    writeFileSync(path, Buffer.from("jpeg"));
+    s.db.saveReport(laporan("m1", "Brando", J("2026-11-20", "10:00"), 1_000_000));
+    s.db.outbox.push({ type: "uploadBukti", messageId: "m1", path });
+    s.g.gagalUpload = new Error("Drive 503");
+    // Backoff 1, 2, 4, 8 menit: percobaan ke-5 pukul 10:45.
+    for (const hm of ["10:30", "10:31", "10:33", "10:37"]) {
+      jam(J("2026-11-20", hm));
+      await flushOutbox(s.rt);
+      await jalankanRefresh(s.rt);
+    }
+    expect(s.semua().filter((o) => o.type === "appendSesi")).toEqual([]);
+    jam(J("2026-11-20", "10:45"));
+    await flushOutbox(s.rt);
+    expect(s.log("belum terunggah")).toHaveLength(1);
+    await jalankanRefresh(s.rt);
+    await flushOutbox(s.rt);
+    const sesi = s.g.applied.filter((o) => o.type === "appendSesi");
+    expect(sesi).toHaveLength(1);
+    expect(sesi[0]!.type === "appendSesi" && sesi[0]!.rows[0]![9]).toBe("");
+    jam(J("2026-11-20", "11:01"));
+    await flushOutbox(s.rt); // gagal ke-6: tidak dicatat lagi
+    expect(s.log("belum terunggah")).toHaveLength(1);
+
+    s.g.gagalUpload = null;
+    jam(J("2026-11-20", "11:40"));
+    await flushOutbox(s.rt);
+    await flushOutbox(s.rt);
+    expect(s.db.getKv("bukti:m1")).toBe("https://drive.google.com/file/d/m1.jpg/view");
+    expect(s.g.applied.filter((o) => o.type === "linkBuktiSesi")).toEqual([
+      { type: "linkBuktiSesi", messageId: "m1", link: "https://drive.google.com/file/d/m1.jpg/view" },
+    ]);
+    expect(existsSync(path)).toBe(false);
+    await jalankanRefresh(s.rt);
+    expect(s.semua().filter((o) => o.type === "appendSesi")).toHaveLength(1); // tidak ditulis dua kali
+  });
+
   it("gagal: backoff 1 menit, log hanya err.message; tanggal appendLog dipulihkan", async () => {
     const s = setup();
     jam(J("2026-11-20", "10:00"));
@@ -501,7 +544,7 @@ describe("antrean ke Sheets", () => {
     expect(op.type === "appendLog" && op.at instanceof Date && op.at.getTime()).toBe(J("2026-11-20", "10:00").getTime());
   });
 
-  it("upsertKredit lama yang gagal tidak menimpa versi lebih baru saat dicoba ulang", async () => {
+  it("writeKredit lama yang gagal tidak menimpa versi lebih baru saat dicoba ulang", async () => {
     const s = setup();
     jam(J("2026-11-20", "10:30"));
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -514,10 +557,10 @@ describe("antrean ke Sheets", () => {
     await jalankanRefresh(s.rt);
     jam(J("2026-11-20", "10:40"));
     await flushOutbox(s.rt);
-    const kredit = s.g.applied.filter((o) => o.type === "upsertKredit");
+    const kredit = s.g.applied.filter((o) => o.type === "writeKredit");
     expect(kredit).toHaveLength(1);
-    expect(kredit[0]!.type === "upsertKredit" && kredit[0]!.rows.map((r) => r.messageId)).toContain("m2");
-    expect(semuaOp(s.db).filter((o) => o.type === "upsertKredit")).toEqual([]);
+    expect(kredit[0]!.type === "writeKredit" && kredit[0]!.rows.map((r) => r.messageId)).toContain("m2");
+    expect(semuaOp(s.db).filter((o) => o.type === "writeKredit")).toEqual([]);
   });
 });
 

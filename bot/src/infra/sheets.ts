@@ -7,7 +7,7 @@ import {
   DASHBOARD_HOST_KONDISI, KONTROL_RANGE, KREDIT_COLUMNS, kreditCells, serialTanggal, targetHarianCells,
   TARGET_HARIAN_COLUMNS, type NilaiSel, type TargetHarianRow,
 } from "../domain/sheetFormulas.js";
-import { toJakartaDate, toJakartaHM } from "../domain/time.js";
+import { addDays, toJakartaDate, toJakartaHM } from "../domain/time.js";
 import type { CumulativeField, HostConfig, LedgerEntry, Platform, Settings } from "../domain/types.js";
 
 /* ---------- Tata letak tab (dipakai juga oleh blueprint sheet, Task 13) ---------- */
@@ -366,32 +366,55 @@ const kosong = (cells: NilaiSel[]): NilaiSel[] => cells.map((c) => c ?? "");
 export const toKreditSheetRows = (rows: KreditRow[]): NilaiSel[][] => rows.map((r) => kosong(kreditCells(r)));
 export const toTargetHarianRows = (rows: TargetHarianRow[]): NilaiSel[][] => rows.map((r) => kosong(targetHarianCells(r)));
 
-const KI = (k: (typeof KREDIT_COLUMNS)[number]["key"]): number => KREDIT_COLUMNS.findIndex((c) => c.key === k);
-const grupKredit = (r: NilaiSel[]): string => `${r[KI("messageId")]}|${r[KI("platform")]}`;
-const kunciKredit = (r: NilaiSel[]): string => `${grupKredit(r)}|${r[KI("host")]}|${r[KI("jam")]}`;
+/** Kolom tanggal (indeks 0-based) tabel fakta yang ditulis per bulan. */
+const KOLOM_TANGGAL = {
+  kredit: KREDIT_COLUMNS.findIndex((c) => c.key === "tanggal"),
+  targetHarian: TARGET_HARIAN_COLUMNS.findIndex((c) => c.key === "tanggal"),
+} as const;
 
-/** Upsert kunci messageId|platform|host|jam; baris basi dengan messageId|platform sama dibuang. Urutan lama dipertahankan. */
-export function mergeKredit(existing: NilaiSel[][], rows: KreditRow[]): NilaiSel[][] {
-  const baru = toKreditSheetRows(rows);
-  const byKey = new Map(baru.map((r) => [kunciKredit(r), r]));
-  const grup = new Set(baru.map(grupKredit));
-  const dipakai = new Set<string>();
-  const hasil: NilaiSel[][] = [];
-  for (const r of existing) {
-    if (!grup.has(grupKredit(r))) {
-      hasil.push(r);
-      continue;
-    }
-    const key = kunciKredit(r);
-    const ganti = byKey.get(key);
-    if (ganti && !dipakai.has(key)) {
-      hasil.push(ganti);
-      dipakai.add(key);
-    }
+/* ---------- Tulis ulang per bulan (Data Kredit, Target Harian) ---------- */
+
+/**
+ * Rencana menulis blok satu bulan di tabel yang urut menurut tanggal; hanya kolom tanggal yang dibaca (indeks =
+ * baris data, 0 = baris 2). Blok = baris pertama bulan itu sampai sebelum baris pertama bulan sesudahnya, termasuk
+ * baris kosong sisa penyusutan sebelumnya.
+ * - blok: tulis n baris di `mulai` ditambah baris kosong sampai `panjangLama` (satu update; di ujung tabel itu
+ *   sekaligus mengosongkan ekor).
+ * - geser: bulan di tengah tabel tumbuh melebihi bloknya: baris sesudahnya (mulai `ekor`) ikut ditulis, bergeser.
+ * - penuh: tabel tidak urut (data lama): tulis ulang seluruh tabel, urut tanggal.
+ */
+export type RencanaBlok =
+  | { jenis: "blok"; mulai: number; panjangLama: number }
+  | { jenis: "geser"; mulai: number; panjangLama: number; ekor: number }
+  | { jenis: "penuh" };
+
+export function rencanaBlokBulan(tanggal: Cell[], month: string, n: number): RencanaBlok {
+  const nilai = tanggal.map((c) => (typeof c === "number" ? c : null));
+  let lalu = -Infinity;
+  for (const v of nilai) {
+    if (v === null) continue;
+    if (v < lalu) return { jenis: "penuh" };
+    lalu = v;
   }
-  for (const r of baru) if (!dipakai.has(kunciKredit(r))) hasil.push(r);
-  return hasil;
+  const [awal, berikut] = batasBulan(month);
+  const cari = (dari: number, batas: number): number => {
+    const i = nilai.findIndex((v, j) => j >= dari && v !== null && v >= batas);
+    return i < 0 ? nilai.length : i;
+  };
+  const mulai = cari(0, awal);
+  const akhir = cari(mulai, berikut);
+  const panjangLama = akhir - mulai;
+  if (n > panjangLama && akhir < nilai.length) return { jenis: "geser", mulai, panjangLama, ekor: akhir };
+  return { jenis: "blok", mulai, panjangLama };
 }
+
+/** Serial tanggal 1 bulan ini dan 1 bulan berikutnya. */
+function batasBulan(month: string): [number, number] {
+  return [serialTanggal(`${month}-01`), serialTanggal(`${addDays(`${month}-01`, 31).slice(0, 7)}-01`)];
+}
+
+/** Urut menurut tanggal (stabil). */
+const urutTanggal = (rows: NilaiSel[][], kol: number): NilaiSel[][] => [...rows].sort((a, b) => Number(a[kol]) - Number(b[kol]));
 
 /* ---------- Operasi tulis ---------- */
 
@@ -412,7 +435,10 @@ export interface KondisiRow {
 
 export type SheetOp =
   | { type: "appendSesi"; rows: NilaiSel[][] }
-  | { type: "upsertKredit"; rows: KreditRow[] }
+  /** Tautan bukti yang terunggah belakangan untuk baris Sesi Live yang sudah ditulis tanpa tautan. */
+  | { type: "linkBuktiSesi"; messageId: string; link: string }
+  /** Seluruh baris Data Kredit satu bulan (entri bertanggal bulan itu); blok bulan itu diganti. */
+  | { type: "writeKredit"; month: string; rows: KreditRow[] }
   | { type: "writeTargetHarian"; month: string; rows: TargetHarianRow[] }
   | { type: "appendKoreksi"; row: KoreksiRow }
   | { type: "appendGangguan"; row: GangguanRow }
@@ -425,19 +451,6 @@ const koreksiCells = (r: KoreksiRow): NilaiSel[] => [
   serialTanggal(r.tanggal), r.host, r.masalah, r.angkaBot, r.usulan, STATUS_MENUNGGU, r.atribusi ?? "", r.messageId,
   r.platform ?? "", r.jenis, r.field ?? "", r.value ?? "",
 ];
-
-/** Target Harian: baris bulan lain dipertahankan, baris bulan itu diganti seluruhnya. */
-export function mergeTargetHarian(existing: NilaiSel[][], month: string, rows: TargetHarianRow[]): NilaiSel[][] {
-  const lain = existing.filter((r) => typeof r[0] !== "number" || serialToDate(r[0]).slice(0, 7) !== month);
-  return [...lain, ...toTargetHarianRows(rows)];
-}
-
-/** Rentang ekor yang harus dihapus setelah tabel (data mulai baris 2) menyusut dari oldLen ke newLen baris; null bila tak perlu. */
-export function tailClearRange(tab: string, width: number, newLen: number, oldLen: number): string | null {
-  if (oldLen <= newLen) return null;
-  const last = colLetter(width - 1);
-  return `'${tab}'!A${newLen + 2}:${last}${oldLen + 1}`;
-}
 
 const colLetter = (n: number): string => String.fromCharCode(65 + n);
 const q = (tab: string): string => `'${tab}'`;
@@ -553,10 +566,12 @@ export class SheetsGateway {
       case "appendLog": return this.append(TAB.log, [[op.at.toISOString(), op.level, op.pesan]]);
       case "writeHeartbeat":
         return this.put(`${TAB.heartbeat}!A2:B2`, [[op.at.toISOString(), op.waStatus]]);
-      case "upsertKredit": return this.rewriteTable(TAB.dataKredit, KREDIT_COLUMNS.length, (old) => mergeKredit(old, op.rows));
+      case "writeKredit":
+        return this.tulisBulan(TAB.dataKredit, KREDIT_COLUMNS.length, KOLOM_TANGGAL.kredit, op.month, toKreditSheetRows(op.rows));
       case "writeTargetHarian":
-        return this.rewriteTable(TAB.targetHarian, TARGET_HARIAN_COLUMNS.length, (old) => mergeTargetHarian(old, op.month, op.rows));
+        return this.tulisBulan(TAB.targetHarian, TARGET_HARIAN_COLUMNS.length, KOLOM_TANGGAL.targetHarian, op.month, toTargetHarianRows(op.rows));
       case "writeKondisi": return this.writeKondisi(op.rows);
+      case "linkBuktiSesi": return this.tautkanBukti(op.messageId, op.link);
     }
   }
 
@@ -574,14 +589,47 @@ export class SheetsGateway {
     });
   }
 
-  /** Baca baris data (tanpa header), ubah, tulis ulang dari A2, lalu hapus sisa ekor yang lebih panjang dari hasil baru. */
-  private async rewriteTable(tab: string, width: number, change: (old: NilaiSel[][]) => NilaiSel[][]): Promise<void> {
+  /**
+   * Ganti blok satu bulan di tabel fakta (urut tanggal; data mulai baris 2) dengan rencanaBlokBulan: biasanya satu
+   * baca kolom tanggal + satu update. Diulang dengan isi sama menghasilkan tabel yang sama (tanpa duplikat).
+   */
+  private async tulisBulan(tab: string, width: number, kolTanggal: number, month: string, baris: NilaiSel[][]): Promise<void> {
+    const rows = urutTanggal(baris, kolTanggal);
     const last = colLetter(width - 1);
-    const old = (await this.read(`${q(tab)}!A2:${last}`)) as NilaiSel[][];
-    const next = change(old);
-    if (next.length > 0) await this.put(`${q(tab)}!A2`, next);
-    const tail = tailClearRange(tab, width, next.length, old.length);
-    if (tail) await this.sheets.spreadsheets.values.clear({ spreadsheetId: this.id, range: tail });
+    const kol = colLetter(kolTanggal);
+    const lengkap = (r: Cell[] = []): NilaiSel[] => Array.from({ length: width }, (_, j) => (r[j] ?? "") as NilaiSel);
+    const tanggal = (await this.read(`${q(tab)}!${kol}2:${kol}`)).map((r) => r[0]);
+    const rencana = rencanaBlokBulan(tanggal, month, rows.length);
+    if (rencana.jenis === "blok") {
+      const isi = [...rows, ...Array.from({ length: Math.max(0, rencana.panjangLama - rows.length) }, () => lengkap())];
+      if (isi.length > 0) await this.put(`${q(tab)}!A${rencana.mulai + 2}`, isi);
+      return;
+    }
+    if (rencana.jenis === "geser") {
+      const ekor = await this.read(`${q(tab)}!A${rencana.ekor + 2}:${last}${tanggal.length + 1}`);
+      const geser = Array.from({ length: tanggal.length - rencana.ekor }, (_, i) => lengkap(ekor[i]));
+      await this.put(`${q(tab)}!A${rencana.mulai + 2}`, [...rows, ...geser]);
+      return;
+    }
+    // Tabel lama tidak urut: tulis ulang seluruhnya sekali, urut tanggal; baris tanpa tanggal dibuang.
+    const semua = await this.read(`${q(tab)}!A2:${last}`);
+    const [awal, berikut] = batasBulan(month);
+    const lain = semua.filter((r) => {
+      const t = r[kolTanggal];
+      return typeof t === "number" && (t < awal || t >= berikut);
+    }).map((r) => lengkap(r));
+    const isi = urutTanggal([...lain, ...rows], kolTanggal);
+    await this.put(`${q(tab)}!A2`, [...isi, ...Array.from({ length: Math.max(0, semua.length - isi.length) }, () => lengkap())]);
+  }
+
+  /** Isi kolom Bukti baris Sesi Live dengan ID Pesan itu (bukti yang terunggah setelah barisnya ditulis). */
+  private async tautkanBukti(messageId: string, link: string): Promise<void> {
+    const kolId = colLetter(SESI_HEADERS.indexOf("ID Pesan"));
+    const kolBukti = colLetter(SESI_HEADERS.indexOf("Bukti"));
+    const ids = await this.read(`${q(TAB.sesi)}!${kolId}2:${kolId}`);
+    const data = ids.flatMap((r, i) => (text(r[0]) === messageId ? [{ range: `${q(TAB.sesi)}!${kolBukti}${i + 2}`, values: [[link]] }] : []));
+    if (data.length === 0) return;
+    await this.sheets.spreadsheets.values.batchUpdate({ spreadsheetId: this.id, requestBody: { valueInputOption: "RAW", data } });
   }
 
   private async writeKondisi(rows: KondisiRow[]): Promise<void> {
