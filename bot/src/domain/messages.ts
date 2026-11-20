@@ -48,10 +48,12 @@ export function msgPagi(date: string, rows: HostSummary[], gangguanKemarin: stri
 
 export function msgTanda(
   host: HostConfig,
-  perPlatform: Array<{ platform: Platform; kredit: number; rounded: boolean }>,
+  perPlatform: Array<{ platform: Platform; kredit: number | null; rounded: boolean }>,
   flags: Flag[],
 ): string {
-  const bagian = perPlatform.map((p) => `${NAMA_PLATFORM[p.platform]} +${rp(p.kredit)}${p.rounded ? "*" : ""}`);
+  // Kredit null = omzet tidak terbaca (sel kosong bukan 0).
+  const bagian = perPlatform.map((p) =>
+    p.kredit === null ? `${NAMA_PLATFORM[p.platform]} omzet belum terbaca` : `${NAMA_PLATFORM[p.platform]} +${rp(p.kredit)}${p.rounded ? "*" : ""}`);
   const baris = [`✅ Tercatat — ${host.name} · ${bagian.join(" · ")} · Balas kalau angka salah`];
   if (perPlatform.some((p) => p.rounded)) baris.push("*angka TikTok dibulatkan");
   if (flags.includes("siaran_baru")) baris.push("Siaran baru tercatat");
@@ -114,6 +116,10 @@ export function msgOwner(
 
 export function msgAckKoreksi(platform: Platform): string {
   return `Koreksi ${NAMA_PLATFORM[platform]} dicatat, menunggu persetujuan owner.`;
+}
+
+export function msgKoreksiTanpaPlatform(platform: Platform): string {
+  return `Laporan itu tidak memuat angka ${NAMA_PLATFORM[platform]}, jadi koreksinya tidak dicatat.`;
 }
 
 export function msgFormatKoreksi(): string {

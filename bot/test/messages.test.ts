@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  mention, msgAckKoreksi, msgAckPerintah, msgFormatKoreksi, msgKirimUlang, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, rp, rpRingkas,
+  mention, msgAckKoreksi, msgAckPerintah, msgFormatKoreksi, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, rp, rpRingkas,
 } from "../src/domain/messages.js";
 import type { HostSummary } from "../src/domain/rekap.js";
 
@@ -59,6 +59,10 @@ describe("pesan", () => {
     expect(msgAckPerintah({ kind: "gangguan", scope: "tiktok", alasan: "x" })).toContain("menunggu persetujuan owner");
     expect(msgAckKoreksi("shopee")).toBe("Koreksi Shopee dicatat, menunggu persetujuan owner.");
     expect(msgFormatKoreksi()).toContain("koreksi shopee 1.350.000");
+    expect(msgKoreksiTanpaPlatform("tiktok")).toContain("TikTok");
+    const nol = msgTanda({ name: "Brando" }, [{ platform: "shopee", kredit: null, rounded: false }, { platform: "tiktok", kredit: 0, rounded: true }], []);
+    expect(nol).toContain("Shopee omzet belum terbaca");
+    expect(nol).toContain("TikTok +Rp0*");
     expect(msgRekap("2026-11-20", rows, { Brando: 1_000_000 })).toContain("Rp1 jt");
   });
 });
