@@ -1,0 +1,57 @@
+# CP Live — WAHA (jembatan WhatsApp) + bot.
+# Dijalankan dari folder ini:  cd deploy && docker compose up -d
+# Semua ${VARIABEL} dibaca otomatis dari berkas .env di folder ini (salin dari .env.example).
+
+services:
+  waha:
+    # Setelah Task 0 (uji WAHA) selesai, KUNCI versinya: isi WAHA_TAG di .env dengan tag yang diuji
+    # (lihat `docker compose images` atau `docker inspect`), supaya pembaruan WAHA tidak mengubah format pesan diam-diam.
+    image: devlikeapro/waha:${WAHA_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?isi WAHA_API_KEY di .env}
+      # Webhook ke bot lewat jaringan internal Docker (bot TIDAK dibuka ke internet).
+      WHATSAPP_HOOK_URL: http://bot:3000/webhook/waha
+      WHATSAPP_HOOK_EVENTS: message,session.status
+      # Harus SAMA dengan WAHA_HMAC_KEY milik bot; bot menolak webhook yang tanda tangannya tidak cocok.
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_HMAC_KEY:?isi WAHA_HMAC_KEY di .env}
+      # Umur berkas media (detik) sebelum dihapus WAHA. VERIFIKASI nama variabel ini di Task 0
+      # (bandingkan dengan dokumentasi/versi WAHA yang terpasang).
+      WHATSAPP_FILES_LIFETIME: "3600"
+      # Sesi "default" otomatis hidup lagi setelah restart (tidak perlu scan QR ulang selama sesi masih sah).
+      WHATSAPP_START_SESSION: default
+      WHATSAPP_RESTART_ALL_SESSIONS: "true"
+      WHATSAPP_DOWNLOAD_MEDIA: "true"
+      # Dashboard (untuk scan QR) dan Swagger dilindungi sandi; hanya bisa dibuka lewat SSH tunnel (lihat port di bawah).
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?isi WAHA_DASHBOARD_PASSWORD di .env}
+      WHATSAPP_SWAGGER_ENABLED: "true"
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?isi WAHA_DASHBOARD_PASSWORD di .env}
+    ports:
+      # HANYA 127.0.0.1: dashboard tidak terbuka ke internet. Dari komputer Anda, buka lewat SSH tunnel.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - waha_sessions:/app/.sessions   # sesi WhatsApp (tanpa ini QR harus di-scan ulang setiap container dibuat ulang)
+      - waha_media:/app/.media         # berkas media sementara
+
+  bot:
+    build: ../bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Nilai tetap di dalam Docker; tidak perlu diisi di .env.
+      WAHA_URL: http://waha:3000
+      DB_PATH: /data/bot.db
+      DATA_DIR: /data
+      PORT: "3000"
+    volumes:
+      - ./data:/data                   # SQLite + bukti lokal; jalankan `sudo chown -R 1000:1000 data` sekali (bot berjalan sebagai uid 1000)
+    depends_on:
+      - waha
+    # Tidak ada `ports`: bot hanya bisa dicapai WAHA lewat jaringan Docker. Healthcheck sudah ada di Dockerfile.
+
+volumes:
+  waha_sessions:
+  waha_media:
