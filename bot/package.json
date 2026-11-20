@@ -10,9 +10,10 @@
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
-    "smoke:extract": "node dist/src/scripts/smoke-extract.js"
+    "smoke:extract": "node dist/scripts/smoke-extract.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.11.0",
     "better-sqlite3": "^13.2.0",
     "zod": "^4.6.7"
   },
