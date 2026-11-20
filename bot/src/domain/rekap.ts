@@ -34,7 +34,7 @@ export interface KreditRow {
 }
 
 export const HOST_BELUM_TERATRIBUSI = "(belum teratribusi)";
-const MIN_HARI_INDEKS = 21;
+export const MIN_HARI_INDEKS = 21;
 const BATAS_WARN = 0.1;
 const STREAK_BAD = 3;
 const JAM_MS = 3_600_000;
