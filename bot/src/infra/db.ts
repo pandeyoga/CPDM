@@ -8,6 +8,8 @@ export interface OutboxItem { id: number; op: OutboxOp; attempts: number; nextAt
 
 export interface Db {
   markMessage(id: string, ts: Date): boolean;
+  /** Pesan sudah ditandai markMessage (tanpa menandai). */
+  isProcessed(id: string): boolean;
   /** Satu laporan per (messageId, platform): satu gambar bisa memuat dua platform. Simpan ulang mengganti. */
   saveReport(r: Report): void;
   reports(month: string): Report[];
@@ -70,6 +72,7 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
 
   const q = {
     mark: db.prepare("INSERT OR IGNORE INTO processed (id, ts) VALUES (?, ?)"),
+    isMarked: db.prepare("SELECT 1 FROM processed WHERE id = ?"),
     lastTs: db.prepare("SELECT MAX(ts) AS ts FROM processed"),
     saveReport: db.prepare(
       `INSERT OR REPLACE INTO reports (message_id, platform, received_ms, effective_ms, eff_ms, host, is_mati, reading)
@@ -104,6 +107,9 @@ export function openDb(path: string, opts: { now?: () => Date } = {}): Db {
   return {
     markMessage(id, ts) {
       return q.mark.run(id, ts.getTime()).changes > 0;
+    },
+    isProcessed(id) {
+      return q.isMarked.get(id) !== undefined;
     },
     saveReport(r) {
       const eff = (r.effectiveAt ?? r.receivedAt).getTime();

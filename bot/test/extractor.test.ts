@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
-import { ClaudeExtractor } from "../src/infra/extractor.js";
+import { buatKlienAnthropic, ClaudeExtractor } from "../src/infra/extractor.js";
 
 const KOSONG = {
   penjualan: null, pesanan_dibuat: null, dilihat: null, komentar: null, masukkan_ke_keranjang: null,
@@ -105,5 +105,13 @@ describe("ClaudeExtractor", () => {
     expect(await new ClaudeExtractor(fake(e400)).extract(img, "image/jpeg")).toEqual({ ok: false, reason: "tidak_terbaca" });
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
+  });
+});
+
+describe("I1: klien Anthropic", () => {
+  it("timeout 120 detik dan maxRetries 2 secara eksplisit", () => {
+    const c = buatKlienAnthropic("sk-test");
+    expect(c.timeout).toBe(120_000);
+    expect(c.maxRetries).toBe(2);
   });
 });

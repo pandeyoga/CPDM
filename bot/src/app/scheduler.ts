@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename } from "node:path";
 import cron from "node-cron";
 import type { Config } from "../config.js";
@@ -10,6 +10,7 @@ import type { Db } from "../infra/db.js";
 import type { Extractor } from "../infra/extractor.js";
 import type { GangguanRow, Invalid, SheetOp, SheetsGateway } from "../infra/sheets.js";
 import type { Incoming, WahaClient } from "../infra/waha.js";
+import { unduhSegera } from "./bukti.js";
 import {
   barisGangguan, gambarTertunda, handleMessage, KV_GANGGUAN_AKTIF, kvIzin, retryPending, type GangguanAktif, type HandleDeps,
   type UploadBuktiOp,
@@ -46,13 +47,15 @@ const SELISIH_MAKS_RP = 1;
 const BATCH_ANTREAN = 50;
 const KV_INPUT = "inputOwner";
 const KV_OWNER_TERTUNDA = "ownerTertunda";
+/** Awal celah pesan yang belum di-catch-up (ISO); "" = tidak ada celah. */
+const KV_CATCH_UP_SEJAK = "catchUpSejak";
 
 export type Gateway = RefreshGateway & Pick<SheetsGateway, "apply" | "uploadBukti" | "readKontrol" | "readKoreksiMenunggu">;
 
 export interface SchedulerDeps {
   config: Pick<Config, "LIVE_GROUP_ID">;
   db: Db;
-  waha: Pick<WahaClient, "sendText" | "download" | "messagesSince" | "sessionStatus">;
+  waha: Pick<WahaClient, "sendText" | "download" | "messageById" | "messagesSince" | "sessionStatus">;
   extractor: Extractor;
   gateway: Gateway;
   dataDir: string;
@@ -117,17 +120,36 @@ async function proses(rt: Runtime, m: Incoming, deps: HandleDeps): Promise<void>
   }
 }
 
-/** Webhook → antrean pesan. Tanpa input owner (belum pernah terbaca) pesan ditinggal dan diambil lagi oleh catch-up. */
+/**
+ * Webhook → antrean pesan. Gambar diunduh segera (di luar antrean, sebelum ekstraksi lain yang lambat) karena tautan
+ * media WAHA kedaluwarsa. Tanpa input owner (belum pernah terbaca) pesan ditinggal dan diambil lagi oleh catch-up.
+ */
 export function terima(rt: Runtime, m: Incoming): Promise<void> {
+  const unduhan = unduhSegera(m, rt.deps);
   return rt.pesan(async () => {
+    await unduhan;
     const deps = handleDeps(rt);
     if (!deps) {
       rt.perluCatchUp = true;
+      const terakhir = rt.deps.db.lastProcessedTs();
+      tandaiCelah(rt.deps.db, terakhir && terakhir < m.ts ? terakhir : m.ts);
       console.error(`penjadwal: pesan ${m.id} menunggu catch-up (Pengaturan belum pernah terbaca)`);
       return;
     }
     await proses(rt, m, deps);
   });
+}
+
+/**
+ * Awal celah catch-up: dipasang sekali saat celah dimulai (mulai, atau pesan ditinggal) dan tidak ditimpa percobaan
+ * yang gagal, supaya webhook live yang diproses sementara itu tidak memajukan titik mulai catch-up. Mengembalikan
+ * awal celah yang berlaku (null = tidak ada yang perlu dikejar).
+ */
+function tandaiCelah(db: Db, sejak: Date | null): Date | null {
+  const v = db.getKv(KV_CATCH_UP_SEJAK);
+  if (v) return new Date(v);
+  if (sejak) db.setKv(KV_CATCH_UP_SEJAK, sejak.toISOString());
+  return sejak;
 }
 
 export function catchUp(rt: Runtime): Promise<void> {
@@ -147,27 +169,35 @@ function lacakCatchUp(rt: Runtime, kerja: Promise<void>): Promise<void> {
   return p;
 }
 
-/** messagesSince(grup, lastProcessedTs − 5 menit), urut ts; pesan yang sudah ditandai dilewati handleMessage. */
+/**
+ * messagesSince(grup, awal celah − 5 menit), urut ts. Awal celah = kv catchUpSejak (bertahan saat gagal/restart),
+ * dipasang dari lastProcessedTs saat celah dimulai, dihapus setelah berhasil. Semua gambar diunduh dulu (tautan
+ * media kedaluwarsa), lalu pesan diproses satu per satu; yang sudah ditandai dilewati handleMessage.
+ */
 async function catchUpSekarang(rt: Runtime): Promise<void> {
+  const { db } = rt.deps;
+  const sejak = tandaiCelah(db, db.lastProcessedTs());
   const deps = handleDeps(rt);
   if (!deps) {
     rt.perluCatchUp = true;
     return;
   }
-  const terakhir = rt.deps.db.lastProcessedTs();
-  if (!terakhir) {
+  if (!sejak) {
     rt.perluCatchUp = false;
     return;
   }
   let pesan: Incoming[];
   try {
-    pesan = await rt.deps.waha.messagesSince(rt.deps.config.LIVE_GROUP_ID, new Date(terakhir.getTime() - CATCH_UP_MUNDUR_MS));
+    pesan = await rt.deps.waha.messagesSince(rt.deps.config.LIVE_GROUP_ID, new Date(sejak.getTime() - CATCH_UP_MUNDUR_MS));
   } catch (e) {
     rt.perluCatchUp = true;
     console.error(`penjadwal: catch-up gagal, diulang menit berikutnya: ${pesanError(e)}`);
     return;
   }
-  for (const m of [...pesan].sort((a, b) => a.ts.getTime() - b.ts.getTime())) await proses(rt, m, deps);
+  const urut = [...pesan].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  for (const m of urut) await unduhSegera(m, rt.deps);
+  for (const m of urut) await proses(rt, m, deps);
+  db.setKv(KV_CATCH_UP_SEJAK, "");
   rt.perluCatchUp = false;
 }
 
@@ -280,7 +310,10 @@ async function jalankanOp(rt: Runtime, op: OpBerversi): Promise<void> {
   catatTerapan(db, op);
 }
 
-/** Dedupe per messageId (kv bukti:<messageId> sudah ada → lewati); berkas hilang → "" (Sesi Live tanpa tautan). */
+/**
+ * Dedupe per messageId (kv bukti:<messageId> sudah ada → lewati); berkas hilang → "" (Sesi Live tanpa tautan).
+ * Setelah terunggah berkas lokal dihapus, kecuali masih dirujuk gambar tertunda.
+ */
 async function unggahBukti(rt: Runtime, op: UploadBuktiOp): Promise<void> {
   const { db, gateway } = rt.deps;
   const k = `bukti:${op.messageId}`;
@@ -291,6 +324,8 @@ async function unggahBukti(rt: Runtime, op: UploadBuktiOp): Promise<void> {
     return;
   }
   db.setKv(k, await gateway.uploadBukti(readFileSync(op.path), basename(op.path)));
+  const tertunda = [...db.pendingExtract.all(), ...db.pendingCaption.all()].some((p) => p.msgId === op.messageId);
+  if (!tertunda) rmSync(op.path, { force: true });
 }
 
 /** Operasi tersimpan sebagai JSON: buang penanda versi, pulihkan Date. */

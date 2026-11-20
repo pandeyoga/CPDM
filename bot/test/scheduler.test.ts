@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -255,6 +255,98 @@ describe("catch-up", () => {
   });
 });
 
+describe("fix wave: catch-up tahan gagal (C1) dan unduh segera (I1)", () => {
+  it("C1: catch-up gagal, webhook live 11:00 diproses → ulangan tetap mulai dari celah awal (≤ 10:00 − 5 menit)", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "10:20"));
+    await jalankanRefresh(s.rt);
+    s.db.markMessage("lama", J("2026-11-20", "10:00"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const asli = s.w.messagesSince;
+    s.w.messagesSince = async () => { throw new Error("WAHA GET messages gagal: HTTP 502"); };
+    await catchUp(s.rt);
+    expect(s.rt.perluCatchUp).toBe(true);
+
+    jam(J("2026-11-20", "11:00"));
+    s.ex.hasil.push(ok(bacaan("shopee", 900_000)));
+    const live = gambar("L", "Brando", J("2026-11-20", "11:00"));
+    await terima(s.rt, live);
+    expect(s.db.lastProcessedTs()).toEqual(J("2026-11-20", "11:00"));
+    jam(J("2026-11-20", "11:01"));
+    await tiapMenit(s.rt); // masih gagal
+    expect(s.rt.perluCatchUp).toBe(true);
+
+    s.w.messagesSince = asli;
+    s.w.riwayat = [gambar("B", "Vanna", J("2026-11-20", "10:30")), live];
+    s.ex.hasil.push(ok(bacaan("shopee", 500_000)));
+    jam(J("2026-11-20", "11:02"));
+    await tiapMenit(s.rt);
+    expect(s.w.sinceArgs.at(-1)!.since.getTime()).toBeLessThanOrEqual(J("2026-11-20", "09:55").getTime());
+    expect(s.db.reports("2026-11").map((r) => r.messageId).sort()).toEqual(["B", "L"]);
+    expect(s.ex.calls).toBe(2);
+    expect(s.rt.perluCatchUp).toBe(false);
+
+    // Celah sudah tertutup: catch-up berikutnya mulai dari pesan terakhir yang diproses.
+    await catchUp(s.rt);
+    expect(s.w.sinceArgs.at(-1)!.since).toEqual(J("2026-11-20", "10:55"));
+  });
+
+  it("C1: celah tercatat saat mulai bertahan restart sampai catch-up berhasil", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "10:20"));
+    await jalankanRefresh(s.rt);
+    s.db.markMessage("lama", J("2026-11-20", "10:00"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const asli = s.w.messagesSince;
+    s.w.messagesSince = async () => { throw new Error("HTTP 502"); };
+    await catchUp(s.rt);
+    s.db.markMessage("live", J("2026-11-20", "11:00"));
+    s.w.messagesSince = asli;
+    const baru = buatRuntime(s.deps); // restart
+    await catchUp(baru);
+    expect(s.w.sinceArgs.at(-1)!.since).toEqual(J("2026-11-20", "09:55"));
+    expect(baru.perluCatchUp).toBe(false);
+  });
+
+  it("I1: gambar webhook diunduh segera saat diterima, walau antrean pesan masih sibuk mengekstrak", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "10:00"));
+    await jalankanRefresh(s.rt);
+    let lepas!: (r: ExtractResult) => void;
+    s.ex.hasil.push(new Promise<ExtractResult>((r) => { lepas = r; }), ok(bacaan("shopee", 900_000)));
+    const x = gambar("WX", "Brando", J("2026-11-20", "10:00"));
+    const y = gambar("WY", "Brando", J("2026-11-20", "10:01"));
+    const p1 = terima(s.rt, x);
+    const p2 = terima(s.rt, y);
+    for (let i = 0; i < 5; i++) await tunggu();
+    expect(s.ex.calls).toBe(1);
+    expect(s.w.unduh).toEqual([x.mediaUrl, y.mediaUrl]);
+    lepas(ok(bacaan("shopee", 500_000)));
+    await Promise.all([p1, p2]);
+    expect(s.w.unduh).toHaveLength(2); // WY tidak diunduh lagi
+    expect(s.db.reports("2026-11").map((r) => r.messageId)).toEqual(["WX", "WY"]);
+  });
+
+  it("I1: catch-up mengunduh semua gambar dulu, baru mengekstrak satu per satu; pesan lama dan perintah tidak diunduh", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "10:20"));
+    await jalankanRefresh(s.rt);
+    const a = gambar("A", "Brando", J("2026-11-20", "10:00"));
+    s.db.markMessage(a.id, a.ts);
+    const b = gambar("B", "Vanna", J("2026-11-20", "10:05"));
+    const c = gambar("C", "Brando", J("2026-11-20", "10:10"));
+    const cmd = gambar("D", "#gangguan listrik", J("2026-11-20", "10:12"));
+    s.w.riwayat = [a, b, c, cmd];
+    const saatEkstrak: number[] = [];
+    s.ex.onExtract = () => saatEkstrak.push(s.w.unduh.length);
+    s.ex.hasil.push(ok(bacaan("shopee", 500_000)), ok(bacaan("shopee", 900_000)));
+    await catchUp(s.rt);
+    expect(s.w.unduh).toEqual([b.mediaUrl, c.mediaUrl]);
+    expect(saatEkstrak).toEqual([2, 2]);
+    expect(s.db.reports("2026-11").map((r) => r.messageId)).toEqual(["B", "C"]);
+  });
+});
+
 describe("serialisasi", () => {
   it("handleMessage satu per satu; proses ulang tidak tumpang tindih", async () => {
     const s = setup();
@@ -344,6 +436,7 @@ describe("antrean ke Sheets", () => {
     await flushOutbox(s.rt);
     expect(s.g.uploads).toEqual([{ name: "m1.jpg", size: 4 }]);
     expect(s.db.getKv("bukti:m1")).toBe("https://drive.google.com/file/d/m1.jpg/view");
+    expect(existsSync(path)).toBe(false); // T12: berkas lokal dihapus setelah terunggah
     expect(s.db.getKv("bukti:m2")).toBe("");
     expect(s.log("m2")).toHaveLength(1);
 
@@ -351,6 +444,20 @@ describe("antrean ke Sheets", () => {
     await flushOutbox(s.rt);
     const sesi = s.g.applied.find((o) => o.type === "appendSesi");
     expect(sesi && sesi.type === "appendSesi" && sesi.rows[0]).toContain("https://drive.google.com/file/d/m1.jpg/view");
+  });
+
+  it("T12: berkas yang masih dirujuk gambar tertunda tidak dihapus setelah terunggah", async () => {
+    const s = setup();
+    jam(J("2026-11-20", "10:30"));
+    const dir = join(s.dir, "bukti");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "m3.jpg");
+    writeFileSync(path, Buffer.from("jpeg"));
+    s.db.pendingCaption.put("m3", "u", "");
+    s.db.outbox.push({ type: "uploadBukti", messageId: "m3", path });
+    await flushOutbox(s.rt);
+    expect(s.db.getKv("bukti:m3")).toBe("https://drive.google.com/file/d/m3.jpg/view");
+    expect(existsSync(path)).toBe(true);
   });
 
   it("gagal: backoff 1 menit, log hanya err.message; tanggal appendLog dipulihkan", async () => {

@@ -43,7 +43,10 @@ const jam = (hm: string, detik = 0): Date => new Date(jakartaDateTime("2026-11-2
 let seq = 0;
 function img(text: string, ts: Date, over: Partial<Incoming> = {}): Incoming {
   const id = `false_${GROUP}_3EB0IMG${++seq}_${WA.Brando}`;
-  return { id, chatId: GROUP, from: WA.Brando, ts, text, hasImage: true, mediaUrl: `http://localhost:3000/api/files/${seq}.jpg`, ...over };
+  return {
+    id, chatId: GROUP, from: WA.Brando, ts, text, hasImage: true, mediaUrl: `http://localhost:3000/api/files/${seq}.jpg`,
+    mime: "image/jpeg", ...over,
+  };
 }
 function txt(text: string, ts: Date, over: Partial<Incoming> = {}): Incoming {
   return { id: `false_${GROUP}_3EB0TXT${++seq}_${WA.Brando}`, chatId: GROUP, from: WA.Brando, ts, text, hasImage: false, ...over };
@@ -66,8 +69,9 @@ function setup() {
   const db = openDb(dbPath);
   dbs.push(db);
   const sent: Sent[] = [];
-  const gagal = { kirim: false, unduh: false, unduhMacet: false };
-  const unduhan = { n: 0 };
+  const gagal = { kirim: false, unduh: false, unduhMacet: false, tautanLama: false };
+  const unduhan = { n: 0, urls: [] as string[], isi: null as Buffer | null };
+  const ambilUlang: Array<[string, string]> = [];
   let n = 0;
   const waha = {
     async sendText(chatId: string, text: string, replyTo?: string, mentions?: string[]) {
@@ -79,16 +83,28 @@ function setup() {
     },
     async download(url: string) {
       unduhan.n++;
+      unduhan.urls.push(url);
       if (gagal.unduhMacet) return new Promise<never>(() => {}); // proses "mati" saat menunggu unduhan
       if (gagal.unduh) throw new Error("WAHA GET /api/files gagal: HTTP 502");
-      return { buf: Buffer.from(`gambar ${url}`), mime: "image/jpeg" };
+      if (gagal.tautanLama && !url.includes("segar")) throw new Error("WAHA GET /api/files gagal: HTTP 404");
+      return { buf: unduhan.isi ?? Buffer.from(`gambar ${url}`), mime: "application/octet-stream" };
+    },
+    /** Tautan media segar dari WAHA (GET pesan menurut id). */
+    async messageById(chatId: string, messageId: string): Promise<Incoming | null> {
+      ambilUlang.push([chatId, messageId]);
+      return {
+        id: messageId, chatId, from: WA.Brando, ts: new Date(0), text: "", hasImage: true,
+        mediaUrl: `http://localhost:3000/api/files/segar-${ambilUlang.length}.jpg`, mime: "image/jpeg",
+      };
     },
   };
   const hasil: Array<ExtractResult | Error | Promise<ExtractResult>> = [];
   const extractor = {
     calls: 0,
-    async extract(_buf: Buffer, _mime: string): Promise<ExtractResult> {
+    mimes: [] as string[],
+    async extract(_buf: Buffer, mime: string): Promise<ExtractResult> {
       extractor.calls++;
+      extractor.mimes.push(mime);
       const r = hasil.shift();
       if (r === undefined) throw new Error("extractor palsu kehabisan hasil");
       if (r instanceof Error) throw r;
@@ -101,7 +117,7 @@ function setup() {
   const ops = (): OutboxOp[] => db.outbox.next(100).map((i) => i.op);
   const terakhir = (): Sent => sent[sent.length - 1]!;
   const bukti = (m: Incoming): string => join(dir, "bukti", `${m.id}.jpg`);
-  return { dir, dbPath, db, sent, gagal, unduhan, hasil, extractor, deps, maju, ops, terakhir, bukti };
+  return { dir, dbPath, db, sent, gagal, unduhan, ambilUlang, hasil, extractor, deps, maju, ops, terakhir, bukti };
 }
 
 /** Sheets palsu: SheetsGateway asli dengan klien googleapis palsu; antrean di-flush lewat apply(). */
@@ -780,5 +796,48 @@ describe("handleMessage: Task 12", () => {
     await retryPending(deps);
     expect(t.db.pendingExtract.all()).toHaveLength(1);
     expect(owner).toEqual([]);
+  });
+});
+
+describe("handleMessage: fix wave (M3, I1)", () => {
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+
+  it("M3: ekstraktor menerima media.mimetype; tanpa itu MIME dari magic bytes; tak dikenal → minta kirim ulang", async () => {
+    const t = setup();
+    t.hasil.push(ok(shopee(1_000_000)), ok(shopee(1_200_000)));
+    await handleMessage(img("Brando", jam("10:00"), { mime: "image/png" }), t.deps);
+    t.unduhan.isi = JPEG;
+    await handleMessage(img("Brando", jam("10:10"), { mime: undefined }), t.deps);
+    expect(t.extractor.mimes).toEqual(["image/png", "image/jpeg"]);
+    expect(t.extractor.mimes).not.toContain("application/octet-stream");
+
+    t.unduhan.isi = Buffer.from("bukan gambar");
+    const aneh = img("Brando", jam("10:20"), { mime: undefined });
+    await handleMessage(aneh, t.deps);
+    expect(t.extractor.calls).toBe(2);
+    expect(t.terakhir()).toMatchObject({ text: msgKirimUlang("ditolak"), replyTo: aneh.id });
+    expect(t.db.pendingExtract.all()).toEqual([]);
+  });
+
+  it("I1: tautan media kedaluwarsa → pesan diambil ulang menurut id untuk tautan segar, lalu diproses", async () => {
+    const t = setup();
+    t.gagal.tautanLama = true;
+    t.hasil.push(ok(shopee(1_317_034)));
+    const m = img("Brando", jam("10:00"));
+    await handleMessage(m, t.deps);
+    expect(t.ambilUlang).toEqual([[GROUP, m.id]]);
+    expect(t.db.reports("2026-11")).toEqual([expect.objectContaining({ messageId: m.id, host: "Brando" })]);
+    expect(t.terakhir().text).toContain("Shopee +Rp1.317.034");
+  });
+
+  it("I1: berkas yang sudah diunduh segera saat diterima dipakai tanpa unduh ulang", async () => {
+    const t = setup();
+    const m = img("Brando", jam("10:00"));
+    const { simpanBukti } = await import("../src/app/bukti.js");
+    simpanBukti(t.dir, m.id, JPEG, "image/jpeg");
+    t.hasil.push(ok(shopee(1_317_034)));
+    await handleMessage(m, t.deps);
+    expect(t.unduhan.n).toBe(0);
+    expect(t.db.reports("2026-11")).toHaveLength(1);
   });
 });

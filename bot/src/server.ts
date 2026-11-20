@@ -1,12 +1,11 @@
 import { realpathSync } from "node:fs";
 import type { Server } from "node:http";
 import { pathToFileURL } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
 import { startScheduler, terima } from "./app/scheduler.js";
 import { loadConfig } from "./config.js";
 import { openDb } from "./infra/db.js";
-import { ClaudeExtractor } from "./infra/extractor.js";
+import { buatKlienAnthropic, ClaudeExtractor } from "./infra/extractor.js";
 import { SheetsGateway, type Invalid } from "./infra/sheets.js";
 import { parseIncoming, verifyWahaHmac, WahaClient, type Incoming } from "./infra/waha.js";
 
@@ -53,7 +52,7 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const db = openDb(config.DB_PATH);
   const waha = new WahaClient({ baseUrl: config.WAHA_URL, apiKey: config.WAHA_API_KEY, session: config.WAHA_SESSION });
-  const extractor = new ClaudeExtractor(new Anthropic({ apiKey: config.ANTHROPIC_API_KEY }));
+  const extractor = new ClaudeExtractor(buatKlienAnthropic(config.ANTHROPIC_API_KEY));
   const invalid: Invalid[] = [];
   const gateway = new SheetsGateway(config, undefined, (items) => void invalid.push(...items));
   const { rt, siap, stop } = startScheduler({

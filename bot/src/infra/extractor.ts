@@ -62,6 +62,14 @@ function toReading(p: Raw): PlatformReading {
   };
 }
 
+/** Batas waktu per permintaan dan jumlah ulang SDK, eksplisit (bawaan SDK 10 menit terlalu lama untuk antrean pesan). */
+export const ANTHROPIC_TIMEOUT_MS = 120_000;
+export const ANTHROPIC_MAX_RETRIES = 2;
+
+export function buatKlienAnthropic(apiKey: string): Anthropic {
+  return new Anthropic({ apiKey, timeout: ANTHROPIC_TIMEOUT_MS, maxRetries: ANTHROPIC_MAX_RETRIES });
+}
+
 export class ClaudeExtractor implements Extractor {
   constructor(private readonly client: Anthropic) {}
 

@@ -55,12 +55,19 @@ export function fakeWaha() {
       w.sent.push({ chatId, text, replyTo, mentions, id });
       return { id };
     },
+    /** URL yang diunduh, berurutan. */
+    unduh: [] as string[],
     async download(url: string) {
+      w.unduh.push(url);
       return { buf: Buffer.from(`gambar ${url}`), mime: "image/jpeg" };
     },
+    async messageById(_chatId: string, _messageId: string): Promise<Incoming | null> {
+      return null;
+    },
+    /** Seperti WAHA: hanya pesan dengan ts ≥ since. */
     async messagesSince(chatId: string, since: Date) {
       w.sinceArgs.push({ chatId, since });
-      return [...w.riwayat];
+      return w.riwayat.filter((m) => m.ts.getTime() >= since.getTime());
     },
     async sessionStatus() {
       if (w.statusGagal) throw new Error("WAHA GET /api/sessions/default gagal: HTTP 502");
@@ -122,8 +129,13 @@ export function fakeExtractor() {
   const e = {
     hasil: [] as Array<ExtractResult | Error | Promise<ExtractResult>>,
     calls: 0,
-    async extract(_buf: Buffer, _mime: string): Promise<ExtractResult> {
+    mimes: [] as string[],
+    /** Dipanggil di awal setiap ekstraksi (mis. untuk memeriksa urutan unduh/ekstrak). */
+    onExtract: undefined as (() => void) | undefined,
+    async extract(_buf: Buffer, mime: string): Promise<ExtractResult> {
       e.calls++;
+      e.mimes.push(mime);
+      e.onExtract?.();
       const r = e.hasil.shift();
       if (r === undefined) throw new Error("extractor palsu kehabisan hasil");
       if (r instanceof Error) throw r;
@@ -136,7 +148,7 @@ export function fakeExtractor() {
 export const ok = (...readings: PlatformReading[]): ExtractResult => ({ ok: true, readings });
 
 export function gambar(id: string, text: string, ts: Date, from = WA.Brando): Incoming {
-  return { id, chatId: GROUP, from, ts, text, hasImage: true, mediaUrl: `http://localhost:3000/api/files/${id}.jpg` };
+  return { id, chatId: GROUP, from, ts, text, hasImage: true, mediaUrl: `http://localhost:3000/api/files/${id}.jpg`, mime: "image/jpeg" };
 }
 
 /** Folder dan db sementara; bersihkan() di afterEach. */

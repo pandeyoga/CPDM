@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseIncoming, verifyWahaHmac, WahaClient } from "../src/infra/waha.js";
 
 const fx = (n: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/waha/${n}.provisional.json`, import.meta.url), "utf8"));
@@ -34,6 +34,17 @@ describe("parseIncoming", () => {
     expect(parseIncoming({ foo: 1 })).toBeNull();
     const pdf = parseIncoming({ id: "x", timestamp: 1, from: "a@g.us", hasMedia: true, media: { mimetype: "application/pdf", url: "u" } });
     expect(pdf?.hasImage).toBe(false);
+  });
+  it("M2: media tanpa info / mimetype tak dikenal → gambar tanpa URL (diminta kirim ulang), bukan diabaikan", () => {
+    const dasar = { id: "x", timestamp: 1, from: "a@g.us", hasMedia: true };
+    for (const media of [undefined, { url: "u" }, { url: "u", mimetype: "" }, { url: "u", mimetype: "application/octet-stream" }]) {
+      const m = parseIncoming({ ...dasar, ...(media ? { media } : {}) });
+      expect(m?.hasImage, JSON.stringify(media)).toBe(true);
+      expect(m?.mediaUrl, JSON.stringify(media)).toBeUndefined();
+    }
+    expect(parseIncoming({ ...dasar, media: { url: "u", mimetype: "video/mp4" } })?.hasImage).toBe(false);
+    expect(parseIncoming({ ...dasar, media: { url: "u", mimetype: "image/png" } })).toMatchObject({ hasImage: true, mediaUrl: "u", mime: "image/png" });
+    expect(parseIncoming({ ...dasar, hasMedia: false })?.hasImage).toBe(false);
   });
 });
 
@@ -112,31 +123,79 @@ describe("WahaClient", () => {
     const r = await client(f).messagesSince("1@g.us", new Date(50_900));
     const u = new URL(calls[0]?.url ?? "");
     expect(u.pathname).toBe("/api/default/chats/1%40g.us/messages");
-    expect(Object.fromEntries(u.searchParams)).toEqual({ limit: "100", downloadMedia: "true", "filter.timestamp.gte": "50", "filter.fromMe": "false" });
+    expect(Object.fromEntries(u.searchParams)).toEqual({ limit: "100", offset: "0", downloadMedia: "true", "filter.timestamp.gte": "50" });
     expect(r.map((m) => m.id)).toEqual(["b", "a"]);
   });
-  it("messagesSince berhalaman sampai halaman < 100 (urutan menurun)", async () => {
-    const msg = (i: number): unknown => ({ id: `m${i}`, timestamp: i, from: "1@g.us", body: String(i) });
-    const p1 = Array.from({ length: 100 }, (_, k) => msg(1100 - k)); // 1100..1001
-    const p2 = [msg(1001), msg(1000), msg(999)];
-    let n = 0;
-    const { f, calls } = fake(() => json(n++ === 0 ? p1 : p2));
-    const r = await client(f).messagesSince("1@g.us", new Date(0));
-    expect(calls).toHaveLength(2);
-    const q2 = new URL(calls[1]?.url ?? "").searchParams;
-    expect(q2.get("filter.timestamp.lte")).toBe("1001");
-    expect(q2.get("filter.timestamp.gte")).toBe("0");
-    expect(r).toHaveLength(102);
-    expect(r[0]?.id).toBe("m999");
-    expect(r.at(-1)?.id).toBe("m1100");
+  /**
+   * Server palsu: 230 pesan (ts 1..230), offset dihitung dari pesan terbaru (WAHA). `filter` = server menerapkan
+   * filter.timestamp.gte sebelum limit; tanpa itu filter diabaikan (kasus terburuk). `urut` = urutan di dalam halaman.
+   */
+  function server230(urut: "menurun" | "menaik", filter: boolean) {
+    const semua = Array.from({ length: 230 }, (_, k) => ({ id: `m${k + 1}`, timestamp: k + 1, from: "1@g.us", body: "x" }));
+    return fake((c) => {
+      const q = new URL(c.url).searchParams;
+      const gte = Number(q.get("filter.timestamp.gte"));
+      const terbaru = [...semua].reverse().filter((m) => !filter || m.timestamp >= gte);
+      const off = Number(q.get("offset"));
+      const halaman = terbaru.slice(off, off + Number(q.get("limit")));
+      return json(urut === "menurun" ? halaman : halaman.reverse());
+    });
+  }
+  const offsets = (calls: Call[]): number[] => calls.map((c) => Number(new URL(c.url).searchParams.get("offset")));
+
+  it.each(["menurun", "menaik"] as const)("messagesSince: 230 pesan, urutan %s, filter diabaikan server → paging offset, saring lokal", async (urut) => {
+    const { f, calls } = server230(urut, false);
+    const r = await client(f).messagesSince("1@g.us", new Date(50_000));
+    expect(offsets(calls)).toEqual([0, 100]); // halaman 2 memuat pesan < since → berhenti
+    expect(r.map((m) => m.ts.getTime() / 1000)).toEqual(Array.from({ length: 181 }, (_, k) => k + 50));
   });
-  it("messagesSince berhalaman (urutan menaik) memakai gte timestamp terbesar", async () => {
-    const msg = (i: number): unknown => ({ id: `m${i}`, timestamp: i, from: "1@g.us" });
-    let n = 0;
-    const { f, calls } = fake(() => json(n++ === 0 ? Array.from({ length: 100 }, (_, k) => msg(k + 1)) : [msg(100), msg(101)]));
+
+  it.each(["menurun", "menaik"] as const)("messagesSince: 230 pesan, urutan %s, since 0 → berhenti di halaman pendek", async (urut) => {
+    const { f, calls } = server230(urut, false);
     const r = await client(f).messagesSince("1@g.us", new Date(0));
-    expect(new URL(calls[1]?.url ?? "").searchParams.get("filter.timestamp.gte")).toBe("100");
-    expect(r).toHaveLength(101);
+    expect(offsets(calls)).toEqual([0, 100, 200]);
+    expect(r).toHaveLength(230);
+    expect(r[0]?.id).toBe("m1");
+    expect(r.at(-1)?.id).toBe("m230");
+  });
+
+  it.each(["menurun", "menaik"] as const)("messagesSince: 230 pesan, urutan %s, server menerapkan filter → sama", async (urut) => {
+    const { f, calls } = server230(urut, true);
+    const r = await client(f).messagesSince("1@g.us", new Date(50_000));
+    expect(offsets(calls)).toEqual([0, 100]);
+    expect(r).toHaveLength(181);
+  });
+
+  it("messagesSince: pesan bot sendiri (fromMe) tidak dipakai, tapi tetap menggeser offset", async () => {
+    const page = Array.from({ length: 100 }, (_, k) => ({ id: `m${k}`, timestamp: 1000 - k, from: "1@g.us", fromMe: k % 2 === 0 }));
+    let n = 0;
+    const { f, calls } = fake(() => json(n++ === 0 ? page : []));
+    const r = await client(f).messagesSince("1@g.us", new Date(0));
+    expect(offsets(calls)).toEqual([0, 100]);
+    expect(r).toHaveLength(50);
+    expect(new URL(calls[0]!.url).searchParams.has("filter.fromMe")).toBe(false);
+  });
+
+  it("messagesSince: paling banyak 50 halaman", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let n = 0;
+    const { f, calls } = fake(() => json(Array.from({ length: 100 }, () => ({ id: `m${n++}`, timestamp: 5000, from: "1@g.us" }))));
+    const r = await client(f).messagesSince("1@g.us", new Date(0));
+    expect(calls).toHaveLength(50);
+    expect(r).toHaveLength(5000);
+  });
+
+  it("messageById: tautan media segar untuk satu pesan", async () => {
+    const { f, calls } = fake(() => json({
+      id: "false_1@g.us_3EB0AA_628@c.us", timestamp: 10, from: "1@g.us", body: "Brando", hasMedia: true,
+      media: { url: "http://localhost:3000/api/files/baru.jpg", mimetype: "image/jpeg" },
+    }));
+    const m = await client(f).messageById("1@g.us", "false_1@g.us_3EB0AA_628@c.us");
+    const u = new URL(calls[0]!.url);
+    expect(u.pathname).toBe("/api/default/chats/1%40g.us/messages/false_1%40g.us_3EB0AA_628%40c.us");
+    expect(u.searchParams.get("downloadMedia")).toBe("true");
+    expect((calls[0]?.init.headers as Record<string, string>)["X-Api-Key"]).toBe("RAHASIA");
+    expect(m).toMatchObject({ mediaUrl: "http://localhost:3000/api/files/baru.jpg", mime: "image/jpeg", hasImage: true });
   });
   it("sessionStatus", async () => {
     const { f, calls } = fake(() => json({ name: "default", status: "WORKING" }));

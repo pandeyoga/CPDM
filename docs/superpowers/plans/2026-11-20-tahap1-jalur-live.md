@@ -800,6 +800,7 @@ toKreditRows(entries: LedgerEntry[], attributions, expected: Map<string, number>
   - Memasang `heartbeat.gs` beserta trigger-nya.
   - `docker compose up -d`.
   - Mengisi tab Pengaturan: target, nomor WA owner dan host, email owner.
+  - Service WAHA di `deploy/docker-compose.yml`: set `WHATSAPP_FILES_LIFETIME=3600` (detik). Tautan media WAHA kedaluwarsa setelah waktu ini; bot mengunduh gambar segera saat diterima dan mengambil tautan segar menurut id bila unduhan gagal, tetapi umur file yang cukup panjang tetap perlu (catatan final review I1).
 - [ ] **Step 2:** User menjalankan panduan. Jalankan `npm run smoke:extract` di VPS. Hasil yang diharapkan: semua field cocok dengan nilai acuan (Task 9).
 - [ ] **Step 3:** Jalankan `docs/uji-skenario.md` bersama user di grup uji. Untuk setiap skenario, catat hasil yang diharapkan dan hasil nyata:
   1. **Alur normal:** dua host bergantian, tanda terima benar, Sesi Live terisi, dashboard berubah dalam 15 menit.

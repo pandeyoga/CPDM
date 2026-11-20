@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { Config } from "../config.js";
 import { matchCaption, parseCommand, parseKoreksi, type Command } from "../domain/caption.js";
 import { applyCorrections, buildLedger, type Correction } from "../domain/ledger.js";
@@ -13,6 +12,7 @@ import type { Db } from "../infra/db.js";
 import type { Extractor } from "../infra/extractor.js";
 import type { GangguanRow, KehadiranRow } from "../infra/sheets.js";
 import type { Incoming, WahaClient } from "../infra/waha.js";
+import { cariBukti, unduhBukti } from "./bukti.js";
 
 /*
  * Orkestrasi satu pesan grup. Semua tulisan ke Sheets lewat db.outbox (tidak butuh gateway Sheets di sini).
@@ -28,7 +28,7 @@ import type { Incoming, WahaClient } from "../infra/waha.js";
 export interface HandleDeps {
   config: Pick<Config, "LIVE_GROUP_ID">;
   db: Db;
-  waha: Pick<WahaClient, "sendText" | "download">;
+  waha: Pick<WahaClient, "sendText" | "download" | "messageById">;
   extractor: Extractor;
   settings: Settings;
   /** Jam proses (bukan jam pesan); dipakai untuk umur item tertunda. */
@@ -58,7 +58,12 @@ const sedangDiproses = new Set<string>();
 
 interface Gambar {
   messageId: string; receivedAt: string; caption: string; mediaUrl: string;
-  /** Berkas lokal; "" sampai unduhan berhasil (proses ulang mengunduh lagi dari mediaUrl). */
+  /** media.mimetype dari WAHA (diutamakan untuk MIME ekstraktor). */
+  mimeMedia?: string;
+  /**
+   * Berkas lokal; "" sampai unduhan berhasil (proses ulang mengunduh lagi dari mediaUrl). mime "" = format tak
+   * dikenal (ditolak).
+   */
   path: string; mime: string;
   /** Jam proses saat gambar mulai tertunda. */
   enqueuedAt: string;
@@ -123,9 +128,11 @@ async function terimaGambar(m: Incoming, deps: HandleDeps): Promise<void> {
     await kirim(deps, msgKirimUlang("ditolak"), m.id);
     return;
   }
+  // Biasanya sudah diunduh segera saat diterima (penjadwal), sebelum antre di belakang ekstraksi lain.
+  const berkas = cariBukti(deps.dataDir, m.id);
   const g: Gambar = {
-    messageId: m.id, receivedAt: m.ts.toISOString(), caption: m.text, mediaUrl: m.mediaUrl, path: "", mime: "",
-    enqueuedAt: deps.now().toISOString(),
+    messageId: m.id, receivedAt: m.ts.toISOString(), caption: m.text, mediaUrl: m.mediaUrl, mimeMedia: m.mime,
+    path: berkas?.path ?? "", mime: berkas?.mime ?? "", enqueuedAt: deps.now().toISOString(),
   };
   const cocok = matchCaption(m.text, namaHost(deps.settings));
 
@@ -204,6 +211,7 @@ async function ekstrakDanSimpan(g: GambarSiap, deps: HandleDeps, diulang: boolea
       g = await unduh(g, deps);
       simpanAntrean(deps.db, g);
     }
+    if (!g.mime) return tolak(g, "ditolak", deps); // bukan JPEG/PNG/WEBP/GIF: tidak pernah dikirim sebagai octet-stream
     hasil = await deps.extractor.extract(readFileSync(g.path), g.mime);
   } catch (e) {
     if (diulang && !adaBerkas(g) && deps.now().getTime() - Date.parse(g.enqueuedAt) >= BUANG_SETELAH_MS) return buang(g, e, deps);
@@ -252,8 +260,8 @@ function layarAkhirSah(g: GambarSiap, readings: PlatformReading[], deps: HandleD
 /** Balasan ke msgMintaRiwayat yang bukan layar akhir sah diproses sebagai gambar biasa (host dari caption). */
 async function bukanLayarAkhir(g: GambarSiap, readings: PlatformReading[], deps: HandleDeps): Promise<void> {
   const biasa: Gambar = {
-    messageId: g.messageId, receivedAt: g.receivedAt, caption: g.caption, mediaUrl: g.mediaUrl, path: g.path, mime: g.mime,
-    enqueuedAt: g.enqueuedAt,
+    messageId: g.messageId, receivedAt: g.receivedAt, caption: g.caption, mediaUrl: g.mediaUrl, mimeMedia: g.mimeMedia,
+    path: g.path, mime: g.mime, enqueuedAt: g.enqueuedAt,
   };
   const cocok = matchCaption(g.caption, namaHost(deps.settings));
   if ("host" in cocok) {
@@ -493,18 +501,12 @@ function simpanAntrean(db: Db, g: GambarSiap): void {
 
 const adaBerkas = (g: Gambar): boolean => g.path !== "" && existsSync(g.path);
 
+/** Unduh (tautan kedaluwarsa → tautan segar dari WAHA menurut id) dan simpan; mediaUrl ikut diperbarui. */
 async function unduh<T extends Gambar>(g: T, deps: HandleDeps): Promise<T> {
-  const { buf, mime } = await deps.waha.download(g.mediaUrl);
-  return { ...g, path: simpanBukti(deps.dataDir, g.messageId, buf, mime), mime };
-}
-
-function simpanBukti(dataDir: string, messageId: string, buf: Buffer, mime: string): string {
-  const dir = join(dataDir, "bukti");
-  mkdirSync(dir, { recursive: true });
-  const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
-  const path = join(dir, `${messageId.replace(/[^\w@.-]/g, "_")}.${ext}`);
-  writeFileSync(path, buf);
-  return path;
+  const b = await unduhBukti(deps.waha, deps.dataDir, {
+    messageId: g.messageId, chatId: deps.config.LIVE_GROUP_ID, mediaUrl: g.mediaUrl, mimeMedia: g.mimeMedia,
+  });
+  return { ...g, ...b };
 }
 
 const namaHost = (s: Settings): string[] => s.hosts.map((h) => h.name);

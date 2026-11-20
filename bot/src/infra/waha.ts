@@ -4,8 +4,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * Klien WAHA (WhatsApp HTTP API). PROVISIONAL: path dan bentuk payload diambil dari kode sumber WAHA
  * (devlikeapro/waha @ c42f68ab), bukan dari server nyata. Task 0 harus mencocokkannya dengan WAHA di VPS.
  *   POST /api/sendText                                   {session, chatId, text, reply_to?, mentions?}
- *   GET  /api/{session}/chats/{chatId}/messages?limit&downloadMedia&filter.timestamp.gte&filter.fromMe
+ *   GET  /api/{session}/chats/{chatId}/messages?limit&offset&downloadMedia&filter.timestamp.gte
+ *   GET  /api/{session}/chats/{chatId}/messages/{messageId}?downloadMedia=true   (tautan media segar)
  *   GET  /api/sessions/{session}                         → {name, status}
+ * Tautan media WAHA kedaluwarsa (WHATSAPP_FILES_LIFETIME); gambar diunduh segera saat diterima (Task 14: set
+ * WHATSAPP_FILES_LIFETIME, mis. 3600, di compose).
  * Autentikasi: header X-Api-Key (juga untuk URL media).
  */
 
@@ -17,6 +20,8 @@ export interface Incoming {
   text: string;
   hasImage: boolean;
   mediaUrl?: string;
+  /** media.mimetype bila gambar (image/*). */
+  mime?: string;
   replyToId?: string;
 }
 
@@ -39,8 +44,11 @@ export function parseIncoming(payload: unknown): Incoming | null {
   if (!id || !chatId || typeof timestamp !== "number") return null;
   if (msg.fromMe === true) return null;
   const media = isObj(msg.media) ? msg.media : undefined;
-  const mime = str(media?.mimetype);
-  const mediaUrl = str(media?.url);
+  const mime = str(media?.mimetype)?.trim().toLowerCase() ?? "";
+  const gambar = mime.startsWith("image/");
+  // Media tanpa info atau mimetype tak dikenal: tetap dianggap gambar, tapi tanpa URL → host diminta kirim ulang.
+  const takDikenal = mime === "" || mime === "application/octet-stream";
+  const mediaUrl = gambar ? str(media?.url) : undefined;
   const replyToId = isObj(msg.replyTo) ? str(msg.replyTo.id) : undefined;
   const incoming: Incoming = {
     id,
@@ -48,9 +56,10 @@ export function parseIncoming(payload: unknown): Incoming | null {
     from: str(msg.participant) ?? chatId,
     ts: new Date(timestamp * 1000),
     text: str(msg.body) ?? "",
-    hasImage: msg.hasMedia === true && (mime?.startsWith("image/") ?? false),
+    hasImage: msg.hasMedia === true && (gambar || takDikenal),
   };
   if (mediaUrl) incoming.mediaUrl = mediaUrl;
+  if (gambar) incoming.mime = mime;
   if (replyToId) incoming.replyToId = replyToId;
   return incoming;
 }
@@ -119,38 +128,46 @@ export class WahaClient {
   }
 
   /**
-   * Menarik halaman 100 pesan sampai satu halaman berisi < 100. Urutan respons dibaca dari timestamp: menurun
-   * (terbaru dulu) → halaman berikut memakai filter.timestamp.lte = timestamp terkecil; menaik → gte = terbesar.
-   * Batas inklusif supaya pesan dengan detik sama tidak hilang; duplikat dibuang menurut id.
+   * Pesan sejak `since` (urut ts). Halaman `limit=100&offset=N` dari pesan terbaru (offset += panjang halaman);
+   * filter.timestamp.gte ikut dikirim tapi tidak diandalkan (mesin WAHA bisa menerapkannya sesudah limit): hasil
+   * disaring lokal ts ≥ since dan pesan bot sendiri dibuang lokal (filter.fromMe tidak dikirim, supaya halaman tidak
+   * memendek). Berhenti bila halaman < 100 atau pesan tertua di halaman (urutan di dalam halaman boleh menurun
+   * atau menaik) lebih tua dari since; paling banyak 50 halaman. Duplikat dibuang menurut id.
    */
   async messagesSince(chatId: string, since: Date): Promise<Incoming[]> {
     const endpoint = `/api/${this.opts.session}/chats/${chatId}/messages`;
     const dasar = `${this.base}/api/${encodeURIComponent(this.opts.session)}/chats/${encodeURIComponent(chatId)}/messages`;
-    const gte0 = Math.floor(since.getTime() / 1000);
+    const sinceS = Math.floor(since.getTime() / 1000);
     const hasil = new Map<string, Incoming>();
-    let gte = gte0;
-    let lte: number | undefined;
-    for (let halaman = 0; halaman < MAX_PAGES; halaman++) {
+    let offset = 0;
+    for (let halaman = 0; ; halaman++) {
+      if (halaman === MAX_PAGES) {
+        console.error(`WAHA: catch-up berhenti di batas ${MAX_PAGES} halaman (${offset} pesan)`);
+        break;
+      }
       const qs = new URLSearchParams({
-        limit: String(PAGE_SIZE), downloadMedia: "true", "filter.timestamp.gte": String(gte), "filter.fromMe": "false",
+        limit: String(PAGE_SIZE), offset: String(offset), downloadMedia: "true", "filter.timestamp.gte": String(sinceS),
       });
-      if (lte !== undefined) qs.set("filter.timestamp.lte", String(lte));
       const data: unknown = await (await this.call("GET", endpoint, `${dasar}?${qs}`)).json();
-      if (!Array.isArray(data)) break;
-      const sebelum = hasil.size;
+      if (!Array.isArray(data) || data.length === 0) break;
       for (const m of data) {
         const p = parseIncoming(m);
-        if (p) hasil.set(p.id, p);
+        if (p && p.ts.getTime() >= sinceS * 1000) hasil.set(p.id, p);
       }
       if (data.length < PAGE_SIZE) break;
       const ts = data.flatMap((m) => (isObj(m) && typeof m.timestamp === "number" ? [m.timestamp] : []));
-      const pertama = ts[0];
-      const terakhir = ts[ts.length - 1];
-      if (pertama === undefined || terakhir === undefined || hasil.size === sebelum) break;
-      if (pertama >= terakhir) lte = Math.min(...ts);
-      else gte = Math.max(...ts);
+      if (ts.length === 0 || Math.min(...ts) < sinceS) break;
+      offset += data.length;
     }
     return [...hasil.values()].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  }
+
+  /** Satu pesan menurut id, dengan tautan media segar (tautan lama kedaluwarsa). Null bila respons bukan pesan. */
+  async messageById(chatId: string, messageId: string): Promise<Incoming | null> {
+    const s = encodeURIComponent(this.opts.session);
+    const url = `${this.base}/api/${s}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}?downloadMedia=true`;
+    const data: unknown = await (await this.call("GET", `/api/${this.opts.session}/chats/${chatId}/messages/{id}`, url)).json();
+    return parseIncoming(data);
   }
 
   async sessionStatus(): Promise<string> {

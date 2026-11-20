@@ -36,6 +36,8 @@ describe("db", () => {
     const db = open();
     expect(db.markMessage("a", new Date("2026-11-01T01:00:00Z"))).toBe(true);
     expect(db.markMessage("a", new Date("2026-11-01T02:00:00Z"))).toBe(false);
+    expect(db.isProcessed("a")).toBe(true);
+    expect(db.isProcessed("b")).toBe(false);
   });
 
   it("laporan round-trip dengan Date, Num dan null utuh", () => {
