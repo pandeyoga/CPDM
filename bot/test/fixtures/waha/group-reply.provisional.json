@@ -1,0 +1,24 @@
+{
+  "id": "evt_01JPROVISIONAL",
+  "timestamp": 1763622120000,
+  "session": "default",
+  "engine": "WEBJS",
+  "event": "message",
+  "payload": {
+    "timestamp": 1763622120,
+    "from": "120363000000000000@g.us",
+    "fromMe": false,
+    "to": "628999999999@c.us",
+    "participant": "628222222222@c.us",
+    "ack": 1,
+    "ackName": "SERVER",
+    "id": "false_120363000000000000@g.us_3EB0CCCC3333_628222222222@c.us",
+    "body": "koreksi shopee 1.350.000",
+    "hasMedia": false,
+    "replyTo": {
+      "id": "true_120363000000000000@g.us_3EB0DDDD4444",
+      "participant": "628999999999@c.us",
+      "body": "Tercatat"
+    }
+  }
+}

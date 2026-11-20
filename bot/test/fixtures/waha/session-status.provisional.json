@@ -1,0 +1,11 @@
+{
+  "id": "evt_01JPROVISIONAL",
+  "timestamp": 1763622120000,
+  "session": "default",
+  "engine": "WEBJS",
+  "event": "session.status",
+  "payload": {
+    "name": "default",
+    "status": "WORKING"
+  }
+}

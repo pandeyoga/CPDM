@@ -1,0 +1,24 @@
+{
+  "id": "evt_01JPROVISIONAL",
+  "timestamp": 1763622120000,
+  "session": "default",
+  "engine": "WEBJS",
+  "event": "message",
+  "payload": {
+    "timestamp": 1763622120,
+    "from": "120363000000000000@g.us",
+    "fromMe": false,
+    "to": "628999999999@c.us",
+    "participant": "628111111111@c.us",
+    "ack": 1,
+    "ackName": "SERVER",
+    "id": "false_120363000000000000@g.us_3EB0AAAA1111_628111111111@c.us",
+    "body": "Brando",
+    "hasMedia": true,
+    "media": {
+      "url": "http://localhost:3000/api/files/3EB0AAAA1111.jpg",
+      "mimetype": "image/jpeg",
+      "filename": null
+    }
+  }
+}
