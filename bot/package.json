@@ -10,6 +10,7 @@
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/server.js",
+    "setup:sheet": "node dist/scripts/setup-sheet.js",
     "smoke:extract": "node dist/scripts/smoke-extract.js"
   },
   "dependencies": {
