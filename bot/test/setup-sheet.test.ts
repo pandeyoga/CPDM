@@ -355,3 +355,67 @@ describe("validasi host dari DAFTAR_HOST", () => {
     expect(r[0]!.setDataValidation!.rule!.condition!.values![0]!.userEnteredValue).toBe("=Pengaturan!$G$2:$G$11");
   });
 });
+
+describe("ukuran grid tab fakta", () => {
+  const MIN: Record<string, number> = {
+    "Data Kredit": 50_000, "Target Harian": 5_000, "Sesi Live": 20_000, "Log Bot": 20_000, "Koreksi & Atribusi": 5_000,
+  };
+  const ids = resolveSheetIds(bp, new Map());
+  const ubah = (r: ReturnType<typeof tabRequests>) =>
+    r.filter((x) => x.updateSheetProperties?.fields === "gridProperties.rowCount").map((x) => x.updateSheetProperties!);
+
+  it("tab fakta baru dibuat langsung dengan jumlah baris yang cukup; tab lain memakai ukuran bawaan", () => {
+    const r = tabRequests(bp, ids, new Set());
+    for (const [title, baris] of Object.entries(MIN)) {
+      const add = r.find((x) => x.addSheet?.properties?.title === title)!;
+      expect(add.addSheet!.properties!.gridProperties, title).toEqual({ rowCount: baris });
+    }
+    expect(r.find((x) => x.addSheet?.properties?.title === "Pengaturan")!.addSheet!.properties!.gridProperties).toBeUndefined();
+  });
+
+  it("tab yang sudah ada dan lebih kecil diperbesar; yang sama atau lebih besar tidak disentuh (tidak pernah menyusut)", () => {
+    const ada = new Set(bp.map((t) => t.title));
+    const jumlah = new Map<string, number>([
+      ["Data Kredit", 1_000], ["Target Harian", 5_000], ["Sesi Live", 80_000], ["Log Bot", 19_999], ["Koreksi & Atribusi", 1_000], ["Pengaturan", 1_000],
+    ]);
+    const u = ubah(tabRequests(bp, ids, ada, jumlah));
+    expect(u.map((x) => [x.properties!.sheetId, x.properties!.gridProperties!.rowCount])).toEqual([
+      [ids.get("Koreksi & Atribusi"), 5_000], [ids.get("Data Kredit"), 50_000], [ids.get("Log Bot"), 20_000],
+    ].sort((a, b) => bp.findIndex((t) => ids.get(t.title) === a![0]) - bp.findIndex((t) => ids.get(t.title) === b![0])));
+  });
+
+  it("jumlah baris tidak diketahui: tidak ada perubahan ukuran", () => {
+    expect(ubah(tabRequests(bp, ids, new Set(bp.map((t) => t.title))))).toEqual([]);
+  });
+
+  async function jalankan(rowCount: (title: string) => number) {
+    const { setupSheet } = await import("../scripts/setup-sheet.js");
+    const titles = sheetBlueprint().map((t) => t.title);
+    const reqs: Array<Record<string, any>> = [];
+    let fields = "";
+    const sheets = { spreadsheets: {
+      get: async (a: { fields: string }) => {
+        fields = a.fields;
+        return { data: { sheets: titles.map((title, i) => ({ properties: { sheetId: 100 + i, title, gridProperties: { rowCount: rowCount(title) } } })) } };
+      },
+      batchUpdate: async (a: { requestBody: { requests: Array<Record<string, any>> } }) => void reqs.push(...a.requestBody.requests),
+      values: { batchGet: async () => ({ data: { valueRanges: [] } }), batchUpdate: async () => ({}) },
+    } };
+    const drive = { about: { get: async () => ({ data: { user: { emailAddress: "o@example.com" } } }) },
+      files: { list: async () => ({ data: { files: [{ id: "F" }] } }) } };
+    await setupSheet(sheets as never, drive as never, { spreadsheetId: "S" });
+    return { reqs, fields };
+  }
+
+  it("setupSheet (jalan ulang): membaca gridProperties.rowCount dan memperbesar tab fakta yang masih 1.000 baris", async () => {
+    const { reqs, fields } = await jalankan(() => 1_000);
+    expect(fields).toContain("gridProperties(rowCount)");
+    const u = reqs.filter((r) => r.updateSheetProperties?.fields === "gridProperties.rowCount").map((r) => r.updateSheetProperties.properties.gridProperties.rowCount);
+    expect(u.sort((a, b) => a - b)).toEqual([5_000, 5_000, 20_000, 20_000, 50_000]);
+  });
+
+  it("setupSheet: jalan ulang saat tab sudah besar tidak menambah perubahan ukuran", async () => {
+    const { reqs } = await jalankan((t) => MIN[t] ?? 1_000);
+    expect(reqs.filter((r) => r.updateSheetProperties?.fields === "gridProperties.rowCount")).toEqual([]);
+  });
+});

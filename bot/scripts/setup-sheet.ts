@@ -55,9 +55,11 @@ export async function setupSheet(
 
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: id,
-    fields: "sheets(properties(sheetId,title),protectedRanges(protectedRangeId,description)),namedRanges(name,namedRangeId)",
+    fields: "sheets(properties(sheetId,title,gridProperties(rowCount)),protectedRanges(protectedRangeId,description)),namedRanges(name,namedRangeId)",
   });
   const ada = new Map((meta.data.sheets ?? []).map((s) => [s.properties!.title!, s.properties!.sheetId!] as const));
+  const jumlahBaris = new Map(
+    (meta.data.sheets ?? []).flatMap((s) => (s.properties?.gridProperties?.rowCount != null ? [[s.properties.title!, s.properties.gridProperties.rowCount] as const] : [])));
   const ids = resolveSheetIds(bp, ada);
   const protectedLama = (meta.data.sheets ?? []).flatMap((s) =>
     (s.protectedRanges ?? []).map((p) => ({ protectedRangeId: p.protectedRangeId!, description: p.description })));
@@ -65,7 +67,7 @@ export async function setupSheet(
 
   const requests: sheets_v4.Schema$Request[] = [
     spreadsheetPropsRequest(),
-    ...tabRequests(bp, ids, new Set(ada.keys())),
+    ...tabRequests(bp, ids, new Set(ada.keys()), jumlahBaris),
     ...namedRangeRequests(ids, namedLama),
     ...validationRequests(bp, ids),
     ...formatRequests(bp, ids),

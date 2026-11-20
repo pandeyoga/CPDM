@@ -475,7 +475,12 @@ export function klienGoogle(cfg: { clientId: string; clientSecret: string; refre
   };
 }
 
+/** Baris yang ditambahkan melebihi kebutuhan saat grid tab fakta penuh, supaya tidak menambah di setiap tulisan. */
+export const BARIS_RUANG_LEGA = 5_000;
+
 export class SheetsGateway {
+  /** Properti grid per tab (sheetId, rowCount), dibaca sekali per instance dan diperbarui saat baris ditambah. */
+  private grid: Map<string, { sheetId: number; rowCount: number }> | undefined;
   private readonly sheets: SheetsClient;
   private readonly drive: DriveClient;
 
@@ -583,6 +588,30 @@ export class SheetsGateway {
     });
   }
 
+  /**
+   * values.update gagal di luar grid tab (bawaan 1.000 baris). Sebelum menulis sampai `barisAkhir` (1-based), tambahkan
+   * baris (appendDimension) bila rowCount tab lebih kecil, plus BARIS_RUANG_LEGA.
+   */
+  private async pastikanBaris(tab: string, barisAkhir: number): Promise<void> {
+    if (!this.grid) {
+      const res = await this.sheets.spreadsheets.get({
+        spreadsheetId: this.id, fields: "sheets(properties(sheetId,title,gridProperties(rowCount)))",
+      });
+      this.grid = new Map((res.data.sheets ?? []).flatMap((s) => {
+        const p = s.properties;
+        return p?.title != null && p.sheetId != null ? [[p.title, { sheetId: p.sheetId, rowCount: p.gridProperties?.rowCount ?? 0 }] as const] : [];
+      }));
+    }
+    const info = this.grid.get(tab);
+    if (!info) throw new Error(`Tab "${tab}" tidak ditemukan di spreadsheet`);
+    if (barisAkhir <= info.rowCount) return;
+    const length = barisAkhir - info.rowCount + BARIS_RUANG_LEGA;
+    await this.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: this.id, requestBody: { requests: [{ appendDimension: { sheetId: info.sheetId, dimension: "ROWS", length } }] },
+    });
+    info.rowCount += length;
+  }
+
   private async put(range: string, values: NilaiSel[][]): Promise<void> {
     await this.sheets.spreadsheets.values.update({
       spreadsheetId: this.id, range, valueInputOption: "RAW", requestBody: { values },
@@ -602,12 +631,16 @@ export class SheetsGateway {
     const rencana = rencanaBlokBulan(tanggal, month, rows.length);
     if (rencana.jenis === "blok") {
       const isi = [...rows, ...Array.from({ length: Math.max(0, rencana.panjangLama - rows.length) }, () => lengkap())];
-      if (isi.length > 0) await this.put(`${q(tab)}!A${rencana.mulai + 2}`, isi);
+      if (isi.length > 0) {
+        await this.pastikanBaris(tab, rencana.mulai + 1 + isi.length);
+        await this.put(`${q(tab)}!A${rencana.mulai + 2}`, isi);
+      }
       return;
     }
     if (rencana.jenis === "geser") {
       const ekor = await this.read(`${q(tab)}!A${rencana.ekor + 2}:${last}${tanggal.length + 1}`);
       const geser = Array.from({ length: tanggal.length - rencana.ekor }, (_, i) => lengkap(ekor[i]));
+      await this.pastikanBaris(tab, rencana.mulai + 1 + rows.length + geser.length);
       await this.put(`${q(tab)}!A${rencana.mulai + 2}`, [...rows, ...geser]);
       return;
     }
@@ -619,7 +652,9 @@ export class SheetsGateway {
       return typeof t === "number" && (t < awal || t >= berikut);
     }).map((r) => lengkap(r));
     const isi = urutTanggal([...lain, ...rows], kolTanggal);
-    await this.put(`${q(tab)}!A2`, [...isi, ...Array.from({ length: Math.max(0, semua.length - isi.length) }, () => lengkap())]);
+    const tulis = [...isi, ...Array.from({ length: Math.max(0, semua.length - isi.length) }, () => lengkap())];
+    await this.pastikanBaris(tab, 1 + tulis.length);
+    await this.put(`${q(tab)}!A2`, tulis);
   }
 
   /** Isi kolom Bukti baris Sesi Live dengan ID Pesan itu (bukti yang terunggah setelah barisnya ditulis). */

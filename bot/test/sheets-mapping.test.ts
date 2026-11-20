@@ -177,10 +177,13 @@ describe("apply dispatch", () => {
     const calls: Array<[string, unknown]> = [];
     const rec = (n: string, data: unknown = {}) => async (p: unknown) => { calls.push([n, p]); return { data }; };
     const sheets = {
-      spreadsheets: { values: {
-        get: rec("get", { values: rows }),
-        update: rec("update"), append: rec("append"), clear: rec("clear"), batchUpdate: rec("batchUpdate"),
-      } },
+      spreadsheets: {
+        get: async () => ({ data: { sheets: [{ properties: { sheetId: 1, title: "Target Harian", gridProperties: { rowCount: 1_000 } } }] } }),
+        values: {
+          get: rec("get", { values: rows }),
+          update: rec("update"), append: rec("append"), clear: rec("clear"), batchUpdate: rec("batchUpdate"),
+        },
+      },
     } as never;
     return { sheets, calls };
   }
@@ -342,7 +345,24 @@ function gridPalsu(awal: Record<string, unknown[][]>) {
     return { tab: m[1]!, c0: kol(m[2]!), r0: Number(m[3]) - 1, c1: m[4] ? kol(m[4]) : undefined, r1: m[5] ? Number(m[5]) - 1 : undefined };
   };
   const kosong = (v: unknown): boolean => v === undefined || v === null || v === "";
-  const sheets = { spreadsheets: { values: {
+  /** Ukuran grid per tab (bawaan Google 1.000 baris); `meta` mencatat panggilan spreadsheets.get/batchUpdate. */
+  const rowCount = new Map<string, number>();
+  const meta: Array<{ op: string; arg?: unknown }> = [];
+  const sheets = { spreadsheets: {
+    get: async () => {
+      meta.push({ op: "get" });
+      return { data: { sheets: [...tabs.keys()].map((title, i) => ({ properties: { sheetId: i + 1, title, gridProperties: { rowCount: rowCount.get(title) ?? 1_000 } } })) } };
+    },
+    batchUpdate: async (p: { requestBody: { requests: Array<{ appendDimension?: { sheetId: number; dimension: string; length: number } }> } }) => {
+      for (const r of p.requestBody.requests) {
+        const a = r.appendDimension!;
+        const title = [...tabs.keys()][a.sheetId - 1]!;
+        rowCount.set(title, (rowCount.get(title) ?? 1_000) + a.length);
+        meta.push({ op: "appendDimension", arg: a });
+      }
+      return {};
+    },
+    values: {
     get: async (p: { range: string }) => {
       calls.push({ op: "get", range: p.range });
       const { tab, c0, r0, c1, r1 } = urai(p.range);
@@ -372,7 +392,7 @@ function gridPalsu(awal: Record<string, unknown[][]>) {
   /** Baris data (tanpa header), baris kosong dibuang. */
   const isi = (tab: string): unknown[][] =>
     (tabs.get(tab) ?? []).slice(1).map((r) => r.map((v) => v ?? "")).filter((r) => r.some((v) => v !== ""));
-  return { sheets: sheets as never, calls, isi, tabs };
+  return { sheets: sheets as never, calls, isi, tabs, rowCount, meta };
 }
 
 describe("I7: rencanaBlokBulan", () => {
@@ -485,5 +505,48 @@ describe("M9: tautan bukti ditambahkan ke baris Sesi Live yang sudah ada", () =>
     expect(calls[0]!.requestBody).toEqual({ valueInputOption: "RAW", data: [
       { range: "'Sesi Live'!J3", values: [["https://drive/x"]] }, { range: "'Sesi Live'!J5", values: [["https://drive/x"]] },
     ] });
+  });
+});
+
+describe("tab fakta tumbuh melewati grid: gateway menambah baris sebelum menulis", () => {
+  const H = KREDIT_COLUMNS.map((c) => c.header);
+  const baris = (i: number): KreditRow => kredit({ messageId: `m${i}`, tanggal: "2026-11-20", omzet: i });
+  const gw = (sheets: never): SheetsGateway => new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets, drive: {} as never });
+  const banyak = (n: number): KreditRow[] => Array.from({ length: n }, (_, i) => baris(i));
+
+  it("akhir tulisan di dalam grid: tidak ada appendDimension", async () => {
+    const f = gridPalsu({ "Data Kredit": [H] });
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-11", rows: banyak(10) });
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toEqual([]);
+  });
+
+  it("akhir tulisan melewati rowCount: appendDimension ROWS dengan ruang lega, sebelum values.update", async () => {
+    const f = gridPalsu({ "Data Kredit": [H] });
+    await gw(f.sheets).apply({ type: "writeKredit", month: "2026-11", rows: banyak(1_200) }); // baris 2..1201 > 1.000
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toEqual([
+      { op: "appendDimension", arg: { sheetId: 1, dimension: "ROWS", length: 201 + 5_000 } },
+    ]);
+    expect(f.rowCount.get("Data Kredit")).toBe(6_201);
+    expect(f.calls.at(-1)).toEqual({ op: "update", range: "'Data Kredit'!A2", rows: 1_200 });
+    expect(f.isi("Data Kredit")).toHaveLength(1_200);
+  });
+
+  it("properti sheet di-cache per instance: satu spreadsheets.get untuk banyak tulis, dan tidak menambah dua kali", async () => {
+    const f = gridPalsu({ "Data Kredit": [H] });
+    const g = gw(f.sheets);
+    await g.apply({ type: "writeKredit", month: "2026-11", rows: banyak(1_200) });
+    await g.apply({ type: "writeKredit", month: "2026-11", rows: banyak(1_300) });
+    await g.apply({ type: "writeKredit", month: "2026-11", rows: banyak(1_300) });
+    expect(f.meta.filter((m) => m.op === "get")).toHaveLength(1);
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toHaveLength(1);
+  });
+
+  it("Target Harian juga; tab tanpa sheet bernama itu tidak memicu galat tambahan selain pesan jelas", async () => {
+    const th = (i: number) => ({ tanggal: "2026-11-20", host: `H${i}`, target: 1, gugur: 0, sebab: "" as const });
+    const f = gridPalsu({ "Target Harian": [["Tanggal", "Host", "Target", "Gugur", "Sebab"]] });
+    await gw(f.sheets).apply({ type: "writeTargetHarian", month: "2026-11", rows: Array.from({ length: 1_100 }, (_, i) => th(i)) });
+    expect(f.meta.filter((m) => m.op === "appendDimension")).toHaveLength(1);
+    const g2 = gw(gridPalsu({ "Lain": [["x"]] }).sheets);
+    await expect(g2.apply({ type: "writeTargetHarian", month: "2026-11", rows: [th(1)] })).rejects.toThrow(/Target Harian/);
   });
 });

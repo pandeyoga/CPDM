@@ -294,11 +294,34 @@ export function spreadsheetPropsRequest(): Request {
   return { updateSpreadsheetProperties: { properties: { timeZone: ZONA_WAKTU, locale: LOCALE }, fields: "timeZone,locale" } };
 }
 
-/** addSheet untuk tab yang belum ada; updateSheetProperties (hidden) untuk tab tersembunyi. */
-export function tabRequests(bp: TabBlueprint[], ids: ReadonlyMap<string, number>, existingTitles: ReadonlySet<string>): Request[] {
+/**
+ * Jumlah baris minimum tab fakta. Sheets menolak values.update di luar grid (bawaan 1.000 baris), sedangkan Data
+ * Kredit bertambah ±800 baris per bulan.
+ */
+export const MIN_BARIS_TAB: Readonly<Record<string, number>> = {
+  [TAB.dataKredit]: 50_000, [TAB.targetHarian]: 5_000, [TAB.sesi]: 20_000, [TAB.log]: 20_000, [TAB.koreksi]: 5_000,
+};
+
+/**
+ * addSheet untuk tab yang belum ada (tab fakta langsung berukuran MIN_BARIS_TAB); updateSheetProperties untuk tab
+ * fakta yang ada tetapi lebih kecil (`rowCounts` dari spreadsheet; tab tanpa angka dilewati; tidak pernah menyusut)
+ * dan untuk tab tersembunyi.
+ */
+export function tabRequests(
+  bp: TabBlueprint[], ids: ReadonlyMap<string, number>, existingTitles: ReadonlySet<string>, rowCounts: ReadonlyMap<string, number> = new Map(),
+): Request[] {
   const out: Request[] = [];
   for (const t of bp) {
-    if (!existingTitles.has(t.title)) out.push({ addSheet: { properties: { sheetId: ids.get(t.title)!, title: t.title } } });
+    if (existingTitles.has(t.title)) continue;
+    const baris = MIN_BARIS_TAB[t.title];
+    out.push({ addSheet: { properties: { sheetId: ids.get(t.title)!, title: t.title, ...(baris ? { gridProperties: { rowCount: baris } } : {}) } } });
+  }
+  for (const t of bp) {
+    const min = MIN_BARIS_TAB[t.title];
+    const ada = rowCounts.get(t.title);
+    if (existingTitles.has(t.title) && min && ada !== undefined && ada < min) {
+      out.push({ updateSheetProperties: { properties: { sheetId: ids.get(t.title)!, gridProperties: { rowCount: min } }, fields: "gridProperties.rowCount" } });
+    }
   }
   for (const t of bp) {
     if (t.hidden) out.push({ updateSheetProperties: { properties: { sheetId: ids.get(t.title)!, hidden: true }, fields: "hidden" } });
