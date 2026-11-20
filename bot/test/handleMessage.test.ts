@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { handleMessage, retryPending, type HandleDeps } from "../src/app/handleMessage.js";
 import { buildLedger } from "../src/domain/ledger.js";
 import {
-  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat,
-  msgSiapa,
+  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
+  msgMintaRiwayat, msgSiapa,
 } from "../src/domain/messages.js";
 import { jakartaDateTime } from "../src/domain/time.js";
 import type { ExtractResult, PlatformReading, Settings } from "../src/domain/types.js";
@@ -727,5 +727,58 @@ describe("handleMessage: fix round 2", () => {
     expect(t.terakhir().text).toContain("Brando · Shopee +Rp100.000");
     const entries = buildLedger(t.db.reports("2026-11"), { maxGapMenit: 240, liveMulai: "09:00" });
     expect(entries.reduce((a, e) => a + (e.credit.omzet ?? 0), 0)).toBe(1_400_000);
+  });
+});
+
+describe("handleMessage: Task 12", () => {
+  it("koreksi disetujui di deps dipakai ledger tanda terima", async () => {
+    const t = setup();
+    t.hasil.push(ok(shopee(1_000_000)));
+    const m1 = img("Brando", jam("10:00"));
+    await handleMessage(m1, t.deps);
+    const deps: HandleDeps = { ...t.deps, koreksi: [{ messageId: m1.id, platform: "shopee", field: "omzet", value: 1_100_000 }] };
+    t.hasil.push(ok(shopee(1_300_000)));
+    await handleMessage(img("Brando", jam("11:00")), deps);
+    expect(t.terakhir().text).toContain("Shopee +Rp200.000");
+  });
+
+  it("gambar tertunda yang tak bisa diunduh lagi (berkas hilang) dibuang setelah 24 jam: Log Bot dan satu pesan owner", async () => {
+    const t = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const owner: string[] = [];
+    const deps: HandleDeps = { ...t.deps, kirimOwner: async (teks: string) => { owner.push(teks); } };
+    t.gagal.unduh = true;
+    const m = img("Brando", jam("10:00"));
+    await handleMessage(m, deps);
+    t.maju(6);
+    await retryPending(deps);
+    t.maju(23 * 60);
+    await retryPending(deps);
+    expect(t.db.pendingExtract.all()).toHaveLength(1);
+    expect(owner).toEqual([]);
+
+    t.maju(60);
+    await retryPending(deps);
+    expect(t.db.pendingExtract.all()).toEqual([]);
+    expect(t.ops().filter((o) => o.type === "appendLog")).toEqual([
+      expect.objectContaining({ level: "ERROR", pesan: expect.stringContaining(m.id) }),
+    ]);
+    expect(owner).toEqual([msgGambarHilang("Brando", "2026-11-20", "10:00")]);
+    await retryPending(deps);
+    expect(owner).toHaveLength(1);
+  });
+
+  it("berkas lokal masih ada: tetap dicoba ulang walau lewat 24 jam", async () => {
+    const t = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const owner: string[] = [];
+    const deps: HandleDeps = { ...t.deps, kirimOwner: async (teks: string) => { owner.push(teks); } };
+    t.hasil.push(new Error("401 invalid x-api-key"));
+    await handleMessage(img("Brando", jam("10:00")), deps);
+    t.maju(25 * 60);
+    t.hasil.push(new Error("401 invalid x-api-key"));
+    await retryPending(deps);
+    expect(t.db.pendingExtract.all()).toHaveLength(1);
+    expect(owner).toEqual([]);
   });
 });

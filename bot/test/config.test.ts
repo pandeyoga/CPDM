@@ -13,6 +13,8 @@ const full: NodeJS.ProcessEnv = {
   LIVE_SPREADSHEET_ID: "sheet",
   BUKTI_FOLDER_ID: "folder",
   DB_PATH: "data/bot.db",
+  WAHA_HMAC_KEY: "hmac",
+  DATA_DIR: "/data",
 };
 
 describe("loadConfig", () => {
@@ -22,7 +24,7 @@ describe("loadConfig", () => {
   });
 
   it("menyebut semua variabel yang hilang", () => {
-    expect(() => loadConfig({})).toThrow(/WAHA_URL[\s\S]*DB_PATH/);
+    expect(() => loadConfig({})).toThrow(/WAHA_URL[\s\S]*DB_PATH[\s\S]*WAHA_HMAC_KEY[\s\S]*DATA_DIR/);
   });
 
   it("mengembalikan config bertipe; JADWAL_SPREADSHEET_ID opsional", () => {
@@ -31,5 +33,20 @@ describe("loadConfig", () => {
     expect(c.DB_PATH).toBe("data/bot.db");
     expect(c.JADWAL_SPREADSHEET_ID).toBeUndefined();
     expect(loadConfig({ ...full, JADWAL_SPREADSHEET_ID: "j" }).JADWAL_SPREADSHEET_ID).toBe("j");
+  });
+});
+
+describe("loadConfig: server (Task 12)", () => {
+  it("WAHA_HMAC_KEY dan DATA_DIR wajib (tanpa bawaan)", () => {
+    const { WAHA_HMAC_KEY: _h, ...tanpaHmac } = full;
+    expect(() => loadConfig(tanpaHmac)).toThrow(/WAHA_HMAC_KEY/);
+    const { DATA_DIR: _d, ...tanpaData } = full;
+    expect(() => loadConfig(tanpaData)).toThrow(/DATA_DIR/);
+    expect(() => loadConfig({ ...full, DATA_DIR: "" })).toThrow(/DATA_DIR/);
+  });
+  it("PORT opsional, bawaan 3000", () => {
+    expect(loadConfig(full).PORT).toBe(3000);
+    expect(loadConfig({ ...full, PORT: "8080" }).PORT).toBe(8080);
+    expect(() => loadConfig({ ...full, PORT: "abc" })).toThrow(/PORT/);
   });
 });

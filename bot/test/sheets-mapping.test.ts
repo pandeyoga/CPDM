@@ -4,7 +4,7 @@ import type { KreditRow } from "../src/domain/rekap.js";
 import type { LedgerEntry } from "../src/domain/types.js";
 import {
   fromSettingsRows, mergeKredit, parseAtribusi, parseAtribusiRows, parseGangguanRows, parseKalenderRows,
-  parseJadwalRows, parseKehadiranRows, parseKoreksiRows, mergeTargetHarian, tailClearRange, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
+  parseJadwalRows, parseKehadiranRows, parseKoreksiMenunggu, parseKoreksiRows, mergeTargetHarian, tailClearRange, SheetsGateway, toKreditSheetRows, toSesiRows, toTargetHarianRows,
   type SheetOp,
 } from "../src/infra/sheets.js";
 
@@ -263,5 +263,26 @@ describe("apply dispatch", () => {
     expect((calls[0]?.[1] as { requestBody: { values: unknown[][] } }).requestBody.values[0]).toEqual([46346, "Linda", "Koreksi", "1", "2", "Menunggu", "", "m1", "shopee", "koreksi", "omzet", 2]);
     await g.apply({ type: "writeTargetHarian", month: "2026-11", rows: [{ tanggal: "2026-11-20", host: "Brando", target: 1, gugur: 0, sebab: "" }] });
     expect(calls.at(-1)?.[0]).toBe("update");
+  });
+});
+
+describe("Task 12: koreksi menunggu, atribusi dengan host tersimpan", () => {
+  const rows: unknown[][] = [
+    ["h"],
+    [46346, "Linda", "x", 1, 2, "Menunggu", "", "m1", "shopee", "koreksi", "omzet", 1],
+    [46346, "Linda", "x", 1, 2, "menunggu", "", "m2", "shopee", "koreksi", "omzet", 1],
+    [46346, "Linda", "x", 1, 2, "Setujui", "", "m3", "shopee", "koreksi", "omzet", 1],
+    [46346, "", "x", 1, 2, "Menunggu", "", "m4", "tiktok", "atribusi", "", ""],
+  ];
+  it("parseKoreksiMenunggu menghitung koreksi berstatus Menunggu saja", () => {
+    expect(parseKoreksiMenunggu(rows)).toBe(2);
+  });
+  it("readAtribusi(hosts) tidak membaca Pengaturan lagi", async () => {
+    const ranges: string[] = [];
+    const sheets = { spreadsheets: { values: { get: async (p: { range: string }) => { ranges.push(p.range); return { data: { values: rows } }; } } } } as never;
+    const g = new SheetsGateway({ LIVE_SPREADSHEET_ID: "SS", BUKTI_FOLDER_ID: "F" }, { sheets, drive: {} as never });
+    await g.readAtribusi(hosts);
+    expect(ranges).toEqual(["'Koreksi & Atribusi'!A:L"]);
+    expect(await g.readKoreksiMenunggu()).toBe(2);
   });
 });

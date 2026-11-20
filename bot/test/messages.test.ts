@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  mention, msgAckKoreksi, msgAckPerintah, msgFormatKoreksi, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, rp, rpRingkas,
+  mention, msgAckKoreksi, msgAckPerintah, msgBelumLapor, msgEskalasi, msgFormatKoreksi, msgGambarHilang, msgGangguanDitutup,
+  msgInputTidakValid, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, msgTidakCocok, rp,
+  rpRingkas, teksStatus,
 } from "../src/domain/messages.js";
 import type { HostSummary } from "../src/domain/rekap.js";
 
@@ -64,5 +66,33 @@ describe("pesan", () => {
     expect(nol).toContain("Shopee omzet belum terbaca");
     expect(nol).toContain("TikTok +Rp0*");
     expect(msgRekap("2026-11-20", rows, { Brando: 1_000_000 })).toContain("Rp1 jt");
+  });
+});
+
+describe("pesan penjadwal (Task 12)", () => {
+  it("pengecekan silang: teks persis", () => {
+    expect(msgTidakCocok(["Brando"])).toBe("Angka dashboard tidak cocok untuk Brando, sedang dicek");
+    expect(msgTidakCocok(["Brando", "Linda"])).toBe("Angka dashboard tidak cocok untuk Brando, Linda, sedang dicek");
+  });
+  it("eskalasi memakai baris yang sama dengan ringkasan owner", () => {
+    const owner = msgOwner("2026-11-20", { bolong: [], belumLengkap: 0, belumTeratribusi: 0, koreksiMenunggu: 0, eskalasi: ["Brando"] });
+    expect(owner.split("\n")).toContain(msgEskalasi(["Brando"]));
+    expect(msgEskalasi(["Brando", "Vanna"]).split("\n")).toHaveLength(2);
+  });
+  it("tag akhir shift menag host; teks status kondisi", () => {
+    expect(msgBelumLapor({ name: "Brando", waId: "628111111111@c.us" })).toMatch(/^@628111111111 /);
+    expect(teksStatus(sum("A", { status: "ok" }))).toBe("✅ sesuai jalur");
+    expect(teksStatus(sum("A", { status: "warn" }))).toBe("⚠️ sedikit tertinggal");
+    expect(teksStatus(sum("A", { status: "bad" }))).toBe("🔴 tertinggal");
+    expect(teksStatus(sum("A", { status: "bad", streakDiBawah: 4 }))).toBe("🔴 4 hari berturut-turut di bawah target");
+  });
+  it("input tak valid, gangguan ditutup, gambar hilang", () => {
+    const inv = msgInputTidakValid([{ tab: "Pengaturan", row: 3, reason: "Jam rekap tidak valid" }]);
+    expect(inv).toContain("Pengaturan baris 3: Jam rekap tidak valid");
+    const g = msgGangguanDitutup([{ tanggal: "2026-11-20", host: "Brando", mulai: "14:00", selesai: "22:00" }]);
+    expect(g).toContain("Brando 20/11 14:00–22:00");
+    expect(msgGangguanDitutup([{ tanggal: "2026-11-20", host: "", mulai: "14:00", selesai: "22:00" }]))
+      .toContain("(host belum diisi)");
+    expect(msgGambarHilang("Brando", "2026-11-20", "10:00")).toContain("Brando 20/11 pukul 10:00");
   });
 });

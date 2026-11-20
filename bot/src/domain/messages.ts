@@ -100,6 +100,9 @@ export function msgRekap(date: string, rows: HostSummary[], harian: Record<strin
   ].join("\n");
 }
 
+const barisEskalasi = (nama: string): string =>
+  `${IKON.bad} ${nama} sudah 3 hari live berturut-turut di bawah target per hari kerja. Perlu ditindaklanjuti.`;
+
 export function msgOwner(
   date: string,
   info: { bolong: string[]; belumLengkap: number; belumTeratribusi: number; koreksiMenunggu: number; eskalasi: string[] },
@@ -109,7 +112,7 @@ export function msgOwner(
   if (info.belumLengkap > 0) out.push(`Siaran belum lengkap: ${info.belumLengkap}`);
   if (info.belumTeratribusi > 0) out.push(`Belum teratribusi: ${info.belumTeratribusi}`);
   if (info.koreksiMenunggu > 0) out.push(`Koreksi menunggu persetujuan: ${info.koreksiMenunggu}`);
-  for (const nama of info.eskalasi) out.push(`🔴 ${nama} sudah 3 hari live berturut-turut di bawah target per hari kerja. Perlu ditindaklanjuti.`);
+  for (const nama of info.eskalasi) out.push(barisEskalasi(nama));
   if (out.length === 1) out.push("Tidak ada hal yang perlu ditindaklanjuti.");
   return out.join("\n");
 }
@@ -135,4 +138,48 @@ export function msgAckPerintah(cmd: Command): string {
     case "izin":
       return `Izin ${tgl(cmd.date)} dicatat (${cmd.alasan}), menunggu persetujuan owner.`;
   }
+}
+
+/* ---------- Penjadwal (Task 12) ---------- */
+
+/** Pesan pribadi ke owner saat streak 3 hari di bawah target per hari kerja baru dimulai. */
+export function msgEskalasi(nama: string[]): string {
+  return nama.map(barisEskalasi).join("\n");
+}
+
+/** Tag di grup untuk host yang masuk shift tapi belum lapor sama sekali (hanya Jadwal aktif = YA). */
+export function msgBelumLapor(host: HostConfig): string {
+  return `${mention(host)} shift hari ini sudah selesai, tapi laporan live-nya belum masuk. Mohon kirim screenshot layar data live ya.`;
+}
+
+/** Pengecekan silang malam: tab Kontrol berbeda lebih dari Rp1 dari hitungan bot. */
+export function msgTidakCocok(hosts: string[]): string {
+  return `Angka dashboard tidak cocok untuk ${hosts.join(", ")}, sedang dicek`;
+}
+
+export function msgInputTidakValid(items: Array<{ tab: string; row: number; reason: string }>): string {
+  return [
+    "Ada isian spreadsheet yang tidak valid, jadi diabaikan bot:",
+    ...items.map((i) => `- ${i.tab} baris ${i.row}: ${i.reason}`),
+    "Mohon diperbaiki di spreadsheet.",
+  ].join("\n");
+}
+
+export function msgGangguanDitutup(rows: Array<{ tanggal: string; host: string; mulai: string; selesai: string }>): string {
+  return [
+    "Gangguan belum ditutup dengan #normal sampai rekap malam, jadi bot mencatat jam selesainya otomatis (menunggu persetujuan di tab Gangguan):",
+    ...rows.map((r) => `- ${r.host || "(host belum diisi)"} ${tgl(r.tanggal)} ${r.mulai}–${r.selesai}`),
+  ].join("\n");
+}
+
+/** Gambar tertunda yang tidak bisa diunduh lagi setelah 24 jam (berkas lokal hilang) dibuang. */
+export function msgGambarHilang(host: string, tanggal: string, jam: string): string {
+  return `Laporan ${host} ${tgl(tanggal)} pukul ${jam} tidak bisa diproses: gambarnya sudah tidak bisa diunduh lagi. Mohon minta host mengirim ulang screenshot-nya di grup.`;
+}
+
+/** Kolom Status "kondisi saat ini" di Dashboard Host. */
+export function teksStatus(s: Pick<HostSummary, "status" | "streakDiBawah">): string {
+  if (s.status === "bad" && s.streakDiBawah >= 3) return `${IKON.bad} ${s.streakDiBawah} hari berturut-turut di bawah target`;
+  if (s.status === "ok") return `${IKON.ok} sesuai jalur`;
+  return s.status === "warn" ? `${IKON.warn} sedikit tertinggal` : `${IKON.bad} tertinggal`;
 }

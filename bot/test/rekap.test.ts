@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  dailyByHost, expectedOmzet, funnel, heatmap, indeksSlot, summarizeHosts, toKreditRows, type HostSummary,
+  dailyByHost, expectedOmzet, funnel, hariStreakDiBawah, heatmap, indeksSlot, summarizeHosts, toKreditRows, type HostSummary,
 } from "../src/domain/rekap.js";
 import { butuhPerHariKerja, computeTargets, type TargetInputs } from "../src/domain/targets.js";
 import type { CumulativeField, Flag, LedgerEntry, Platform } from "../src/domain/types.js";
@@ -506,5 +506,17 @@ describe("dailyByHost", () => {
       ent({ host: "Vanna", date: "2026-12-01", from: "09:00", to: "10:00", omzet: 300_000 }),
     ], "2026-11");
     expect(d).toEqual({ Brando: { "2026-11-19": 150_000 }, Vanna: { "2026-11-30": 900_000 } });
+  });
+});
+
+describe("hariStreakDiBawah", () => {
+  it("tanggal hari streak, terbaru dulu; panjangnya = streakDiBawah", () => {
+    const inp = base();
+    const targets = computeTargets(inp);
+    const es = ["2026-11-14", "2026-11-17", "2026-11-18", "2026-11-19"].map((date, i) =>
+      ent({ host: "Brando", date, from: "09:00", to: "12:00", omzet: i === 0 ? 2_000_000 : 100_000 }));
+    const hari = hariStreakDiBawah("Brando", es, targets.Brando!, inp, "2026-11-20");
+    expect(hari).toEqual(["2026-11-19", "2026-11-18", "2026-11-17"]);
+    expect(summarizeHosts(es, [], targets, inp, "2026-11-20", {}).find((s) => s.host === "Brando")!.streakDiBawah).toBe(3);
   });
 });

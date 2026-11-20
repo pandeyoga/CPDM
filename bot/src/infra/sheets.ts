@@ -247,6 +247,11 @@ export function parseKoreksiRows(rows: Cell[][]): Parsed<Array<{ messageId: stri
   });
 }
 
+/** Jumlah baris koreksi (jenis "koreksi") yang Keputusan-nya masih "Menunggu" (ringkasan owner). */
+export function parseKoreksiMenunggu(rows: Cell[][]): number {
+  return rows.filter((r, i) => i > 0 && sama(r[KOREKSI_IDX.jenis], "koreksi") && sama(r[KOREKSI_IDX.keputusan], STATUS_MENUNGGU.toLowerCase())).length;
+}
+
 /** Kunci `${messageId}|${platform}` (ledger R15). */
 export function parseAtribusiRows(rows: Cell[][], hosts: Array<{ name: string }>): Parsed<Map<string, Array<{ host: string; share: number }>>> {
   const p = parseRows(TAB.koreksi, rows, (r) => {
@@ -450,7 +455,10 @@ export class SheetsGateway {
 
   readSettings = async (): Promise<Settings> => this.lapor(fromSettingsRows(await this.read(`${TAB.pengaturan}!${PENGATURAN_READ}`)));
   readKoreksiKeputusan = async () => this.lapor(parseKoreksiRows(await this.read(`${q(TAB.koreksi)}!A:L`)));
-  readAtribusi = async () => this.lapor(parseAtribusiRows(await this.read(`${q(TAB.koreksi)}!A:L`), (await this.readSettings()).hosts));
+  /** `hosts` dari Pengaturan yang sudah dibaca (refresh); tanpa itu Pengaturan dibaca ulang. */
+  readAtribusi = async (hosts?: Array<{ name: string }>) =>
+    this.lapor(parseAtribusiRows(await this.read(`${q(TAB.koreksi)}!A:L`), hosts ?? (await this.readSettings()).hosts));
+  readKoreksiMenunggu = async (): Promise<number> => parseKoreksiMenunggu(await this.read(`${q(TAB.koreksi)}!A:L`));
   readKehadiran = async () => this.lapor(parseKehadiranRows(await this.read(`${TAB.kehadiran}!A:F`)));
   readGangguan = async () => this.lapor(parseGangguanRows(await this.read(`${TAB.gangguan}!A:G`)));
   readKalenderLive = async () => this.lapor(parseKalenderRows(await this.read(`${q(TAB.kalender)}!A:B`)));

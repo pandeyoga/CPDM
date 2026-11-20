@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { Config } from "../config.js";
 import { matchCaption, parseCommand, parseKoreksi, type Command } from "../domain/caption.js";
-import { buildLedger } from "../domain/ledger.js";
+import { applyCorrections, buildLedger, type Correction } from "../domain/ledger.js";
 import {
-  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat,
-  msgSiapa, msgTanda,
+  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
+  msgMintaRiwayat, msgSiapa, msgTanda,
 } from "../domain/messages.js";
 import { addDays, jakartaDateTime, toJakartaDate, toJakartaHM } from "../domain/time.js";
 import type { ExtractResult, HostConfig, LedgerEntry, Platform, PlatformReading, Report, Settings } from "../domain/types.js";
@@ -22,6 +22,7 @@ import type { Incoming, WahaClient } from "../infra/waha.js";
  * Gambar tidak pernah hilang setelah markMessage: konteksnya (kv gambar:<messageId>) dan antrean pendingExtract
  * (atau pendingCaption) ditulis sebelum unduh/ekstraksi dan baru dilepas pada hasil akhir (tersimpan atau ditolak).
  * Pertanyaan "siapa" yang belum terkirim (gagal kirim, atau proses mati sebelum bertanya) diulang oleh retryPending.
+ * Gambar tertunda yang berkas lokalnya hilang dan tidak bisa diunduh lagi dibuang setelah 24 jam (Log Bot + owner).
  */
 
 export interface HandleDeps {
@@ -34,6 +35,10 @@ export interface HandleDeps {
   now: () => Date;
   /** Bukti disimpan di <dataDir>/bukti/<messageId>.<ext> sebelum diunggah lewat antrean (R36). */
   dataDir: string;
+  /** Koreksi yang disetujui owner (salinan refresh terakhir); ledger tanda terima memakai applyCorrections. */
+  koreksi?: Correction[];
+  /** Pesan pribadi ke owner (penjadwal: sendCapped ke No WA owner). Tanpa ini hanya dicatat di log. */
+  kirimOwner?: (text: string) => Promise<unknown>;
 }
 
 /** Operasi antrean di luar SheetOp; dijalankan runner antrean (Task 12) lewat sheets.uploadBukti. */
@@ -43,6 +48,8 @@ export const KV_GANGGUAN_AKTIF = "gangguanAktif";
 const SUMBER = "Grup WA";
 /** Item tertunda baru diambil ulang setelah selama ini (yang lebih muda mungkin masih diproses). */
 const PROSES_ULANG_SETELAH_MS = 5 * 60_000;
+/** Gambar tertunda tanpa berkas lokal yang masih gagal diunduh setelah selama ini dibuang (URL media WAHA kedaluwarsa). */
+const BUANG_SETELAH_MS = 24 * 3600_000;
 
 /** Gambar yang sedang ditangani (ekstraksi atau pertanyaan siapa) di proses ini; retryPending tidak mengambilnya dobel. */
 const sedangDiproses = new Set<string>();
@@ -61,7 +68,8 @@ interface Gambar {
 type GambarSiap = Gambar & { host: string; isMati: boolean };
 /** before = laporan pertama siaran baru, after = laporan terakhir siaran lama; *Date = tanggal entri ledger-nya. */
 interface Riwayat { platform: Platform; host: string; beforeIso: string; beforeDate?: string; afterIso?: string; afterDate?: string }
-interface GangguanAktif { tanggal: string; mulai: string; host: string; alasan: string; scope: Platform | "semua" }
+/** Isi kv KV_GANGGUAN_AKTIF (JSON array; "" = tidak ada gangguan aktif). */
+export interface GangguanAktif { tanggal: string; mulai: string; host: string; alasan: string; scope: Platform | "semua" }
 
 export async function handleMessage(m: Incoming, deps: HandleDeps): Promise<void> {
   if (m.chatId !== deps.config.LIVE_GROUP_ID) return;
@@ -187,6 +195,7 @@ async function ekstrakDanSimpan(g: GambarSiap, deps: HandleDeps, diulang: boolea
     }
     hasil = await deps.extractor.extract(readFileSync(g.path), g.mime);
   } catch (e) {
+    if (diulang && !adaBerkas(g) && deps.now().getTime() - Date.parse(g.enqueuedAt) >= BUANG_SETELAH_MS) return buang(g, e, deps);
     console.error(`handleMessage: gambar ${g.messageId} belum bisa diekstraksi, menunggu proses ulang: ${pesanError(e)}`);
     if (!diulang) await kirim(deps, msgDiproses(), g.messageId);
     return;
@@ -198,6 +207,22 @@ async function ekstrakDanSimpan(g: GambarSiap, deps: HandleDeps, diulang: boolea
   if (readings.length === 0) return tolak(g, "tidak_terbaca", deps);
   if (layarAkhirSah(g, readings, deps)) return simpanLaporan(g, readings, deps);
   return bukanLayarAkhir(g, hasil.readings, deps);
+}
+
+/** Berkas lokal hilang dan media WAHA tidak bisa diunduh lagi: lepas dari antrean, catat di Log Bot, beri tahu owner. */
+async function buang(g: GambarSiap, e: unknown, deps: HandleDeps): Promise<void> {
+  const { db } = deps;
+  db.pendingExtract.done(g.messageId);
+  const pesan = `Laporan ${g.messageId} (${g.host}) dibuang setelah 24 jam: gambar tidak bisa diunduh lagi (${pesanError(e)})`;
+  console.error(`handleMessage: ${pesan}`);
+  db.outbox.push({ type: "appendLog", at: deps.now(), level: "ERROR", pesan });
+  const diterima = new Date(g.receivedAt);
+  const teks = msgGambarHilang(g.host, toJakartaDate(diterima), toJakartaHM(diterima));
+  try {
+    await deps.kirimOwner?.(teks);
+  } catch (err) {
+    console.error(`handleMessage: pesan owner gagal: ${pesanError(err)}`);
+  }
 }
 
 async function tolak(g: GambarSiap, reason: Parameters<typeof msgKirimUlang>[0], deps: HandleDeps): Promise<void> {
@@ -247,13 +272,17 @@ function keLaporan(g: GambarSiap, readings: PlatformReading[]): Report[] {
   }));
 }
 
-/** Ledger dari hari Jakarta sebelumnya pukul 00:00 (R14); `tambahan` menggantikan laporan tersimpan dengan messageId sama. */
+/**
+ * Ledger dari hari Jakarta sebelumnya pukul 00:00 (R14) dengan koreksi yang disetujui; `tambahan` menggantikan
+ * laporan tersimpan dengan messageId sama.
+ */
 function ledgerSekitar(at: Date, deps: HandleDeps, tambahan: Report[] = []): LedgerEntry[] {
   const tanggal = toJakartaDate(at);
   const mulai = jakartaDateTime(addDays(tanggal, -1), "00:00").getTime();
   const ganti = new Set(tambahan.map((r) => r.messageId));
   const reports = deps.db.reports(tanggal.slice(0, 7)).filter((r) => waktu(r).getTime() >= mulai && !ganti.has(r.messageId));
-  return buildLedger([...reports, ...tambahan], { maxGapMenit: deps.settings.maxGapMenit, liveMulai: deps.settings.liveMulai });
+  const semua = applyCorrections([...reports, ...tambahan], deps.koreksi ?? []);
+  return buildLedger(semua, { maxGapMenit: deps.settings.maxGapMenit, liveMulai: deps.settings.liveMulai });
 }
 
 /**
@@ -393,7 +422,7 @@ function jenisIzin(alasan: string): KehadiranRow["jenis"] {
 }
 
 /** Satu baris per tanggal Jakarta yang dilewati gangguan (lewat tengah malam: 23:59 / 00:00). */
-function barisGangguan(g: GangguanAktif, selesai: Date): GangguanRow[] {
+export function barisGangguan(g: GangguanAktif, selesai: Date): GangguanRow[] {
   const akhir = toJakartaDate(selesai);
   const label = g.scope === "tiktok" ? "TikTok" : "Shopee";
   const alasan = g.scope === "semua" ? g.alasan : `${label}${g.alasan ? `: ${g.alasan}` : ""}`;

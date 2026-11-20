@@ -272,16 +272,17 @@ export function toKreditRows(entries: LedgerEntry[], expected: Map<string, numbe
 const omzetDari = (es: LedgerEntry[]): number => jumlah(es, "omzet") ?? 0;
 
 /**
- * Hari live berturut-turut sampai kemarin dengan kredit < perHariKerja. Dilewati (tidak memutus, tidak
+ * Tanggal hari live berturut-turut sampai kemarin (terbaru dulu) dengan kredit < perHariKerja; panjangnya =
+ * streakDiBawah, tanggal terakhir = awal streak (kunci eskalasi owner). Dilewati (tidak memutus, tidak
  * menambah): izin, hari tanpa live, di luar rentang aktif host, hari yang laporan host-nya semua
  * belum_teratribusi (R23), tanpa jadwal: hari tanpa laporan host; dengan jadwal: hari tanpa shift host
  * (shift tanpa laporan dihitung kredit 0).
  */
-function streakDiBawah(host: string, es: LedgerEntry[], t: HostTarget, inp: TargetInputs, today: string): number {
+export function hariStreakDiBawah(host: string, es: LedgerEntry[], t: HostTarget, inp: TargetInputs, today: string): string[] {
   const cfg = inp.hosts.find((h) => h.name === host);
   const hari = daysInMonth(inp.month);
   const kemarin = addDays(today, -1);
-  let n = 0;
+  const streak: string[] = [];
   for (const d of hari.filter((x) => x <= kemarin).reverse()) {
     const laporan = es.filter((e) => e.host === host && e.date === d);
     const teratribusiSaja = laporan.filter(teratribusi);
@@ -294,9 +295,9 @@ function streakDiBawah(host: string, es: LedgerEntry[], t: HostTarget, inp: Targ
       (inp.jadwal ? !inp.jadwal.some((r) => r.date === d && r.host === host) : laporan.length === 0);
     if (dilewati) continue;
     if (omzetDari(teratribusiSaja) >= t.perHariKerja) break;
-    n++;
+    streak.push(d);
   }
-  return n;
+  return streak;
 }
 
 function status(realisasi: number, harus: number, streak: number): HostSummary["status"] {
@@ -335,7 +336,7 @@ export function summarizeHosts(
       lastMonth.filter((e) => teratribusi(e) && e.host === host && e.date >= awalLalu && e.date <= batasLalu),
     );
     const laporan = new Set(bulanIni.filter((e) => e.host === host).map((e) => e.messageId)).size;
-    const streak = streakDiBawah(host, bulanIni, t, inp, today);
+    const streak = hariStreakDiBawah(host, bulanIni, t, inp, today).length;
     return [{
       host,
       target: t.bulan,
