@@ -18,27 +18,57 @@ function satuDesimal(x: number): string {
   return s.endsWith(",0") ? s.slice(0, -2) : s;
 }
 
+/** Satuan dipilih sesudah pembulatan: 999.950 → "Rp1 jt", bukan "Rp1.000 rb". */
 export function rpRingkas(n: number): string {
   const abs = Math.abs(n);
   const tanda = n < 0 ? "−" : "";
-  if (abs >= 1_000_000) return `${tanda}Rp${satuDesimal(abs / 1_000_000)} jt`;
-  if (abs >= 1_000) return `${tanda}Rp${titik(Math.round(abs / 1_000))} rb`;
+  const ribu = Math.round(abs / 1_000);
+  if (ribu >= 1_000) return `${tanda}Rp${satuDesimal(abs / 1_000_000)} jt`;
+  if (Math.round(abs) >= 1_000) return `${tanda}Rp${titik(ribu)} rb`;
   return rp(n);
 }
 
 const persen = (fraksi: number): string => `${satuDesimal(fraksi * 100)}%`;
+/** Perubahan bertanda satu desimal: 0,05 → "+5,0%", −0,032 → "−3,2%". */
+const persenBertanda = (fraksi: number): string =>
+  `${fraksi > 0 ? "+" : fraksi < 0 ? "−" : ""}${(Math.abs(fraksi) * 100).toFixed(1).replace(".", ",")}%`;
 
 const tgl = (date: string): string => `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+const tglPenuh = (date: string): string => `${tgl(date)}/${date.slice(0, 4)}`;
 
 export function mention(host: HostConfig): string {
   if (host.waId) return `@${host.waId.split("@")[0] ?? host.waId}`;
   return `@${host.name}`;
 }
 
-export function msgPagi(date: string, rows: HostSummary[], gangguanKemarin: string[]): string {
+/**
+ * Update pagi per host: realisasi bulan berjalan, % vs seharusnya, selisih kurang/lebih, vs bulan lalu, jam shift
+ * (`shift[host]`, hanya saat Jadwal aktif dan diketahui), kebutuhan per hari kerja (atau ucapan selamat bila target
+ * sudah tercapai). Host ⚠️/🔴 mendapat satu baris yang lebih tegas, tanpa mempermalukan.
+ */
+export function msgPagi(date: string, rows: HostSummary[], gangguanKemarin: string[], shift: Record<string, string> = {}): string {
   const baris = rows.map((r) => {
-    const pctSeharusnya = r.seharusnya > 0 ? ` · ${persen(r.realisasi / r.seharusnya)} dari yang seharusnya` : "";
-    return `${IKON[r.status]} *${r.host}*: ${rpRingkas(r.realisasi)} dari ${rpRingkas(r.target)} (${persen(r.pctTarget)})${pctSeharusnya}\n   Ayo kejar ${rpRingkas(Math.max(0, r.butuhPerHariKerja))} per hari kerja`;
+    const adaTarget = r.target > 0;
+    const out = [adaTarget
+      ? `${IKON[r.status]} *${r.host}*: ${rpRingkas(r.realisasi)} dari target ${rpRingkas(r.target)} (${persen(r.pctTarget)})`
+      : `${IKON[r.status]} *${r.host}*: ${rpRingkas(r.realisasi)} bulan ini · target bulan belum diisi`];
+    const rincian: string[] = [];
+    if (adaTarget && r.seharusnya > 0) {
+      rincian.push(`${persen(r.realisasi / r.seharusnya)} dari yang seharusnya`);
+      rincian.push(r.selisih < 0 ? `kurang ${rpRingkas(-r.selisih)}` : r.selisih > 0 ? `lebih ${rpRingkas(r.selisih)}` : "pas sesuai jalur");
+    }
+    rincian.push(`${r.vsBulanLalu === null ? "–" : persenBertanda(r.vsBulanLalu)} vs bulan lalu`);
+    out.push(`   ${rincian.join(" · ")}`);
+    if (shift[r.host]) out.push(`   Shift ${shift[r.host]}`);
+    if (adaTarget) {
+      if (r.butuhPerHariKerja > 0) {
+        out.push(`   Ayo kejar ${rpRingkas(r.butuhPerHariKerja)} per hari kerja`);
+        if (r.status !== "ok") out.push("   Perlu dikejar hari ini, semangat!");
+      } else {
+        out.push("   Target bulan ini sudah tercapai, selamat! 🎉");
+      }
+    }
+    return out.join("\n");
   });
   const out = [`Selamat pagi tim! Update target ${tgl(date)}`, "", ...baris];
   if (gangguanKemarin.length > 0) out.push("", `Catatan: kemarin ada gangguan di ${gangguanKemarin.join(", ")}.`);
@@ -62,7 +92,7 @@ export function msgTanda(
 }
 
 export function msgSiapa(): string {
-  return "Laporan ini dari siapa? Balas dengan nama host ya.";
+  return "Ini laporan siapa?";
 }
 
 export function msgKirimUlang(reason: "bukan_layar_live" | "tidak_terbaca" | "ditolak"): string {
@@ -121,12 +151,17 @@ export function msgAckKoreksi(platform: Platform): string {
   return `Koreksi ${NAMA_PLATFORM[platform]} dicatat, menunggu persetujuan owner.`;
 }
 
+/** Laporan tercatat atas nama host yang salah ("koreksi host Vanna"). */
+export function msgAckAtribusi(host: string): string {
+  return `Atribusi ke ${host} dicatat, menunggu persetujuan owner.`;
+}
+
 export function msgKoreksiTanpaPlatform(platform: Platform): string {
   return `Laporan itu tidak memuat angka ${NAMA_PLATFORM[platform]}, jadi koreksinya tidak dicatat.`;
 }
 
 export function msgFormatKoreksi(): string {
-  return "Koreksinya belum terbaca. Balas tanda terima dengan format: koreksi shopee 1.350.000 (atau misalnya: koreksi tiktok pesanan 9).";
+  return "Koreksinya belum terbaca. Balas tanda terima dengan format: koreksi shopee 1.350.000 (atau misalnya: koreksi tiktok pesanan 9). Kalau laporannya tercatat atas nama host yang salah: koreksi host <nama host>.";
 }
 
 export function msgAckPerintah(cmd: Command): string {
@@ -136,7 +171,7 @@ export function msgAckPerintah(cmd: Command): string {
     case "normal":
       return "Kembali normal dicatat.";
     case "izin":
-      return `Izin ${tgl(cmd.date)} dicatat (${cmd.alasan}), menunggu persetujuan owner.`;
+      return `Izin ${tglPenuh(cmd.date)} dicatat (${cmd.alasan}), menunggu persetujuan owner.`;
   }
 }
 
@@ -157,10 +192,14 @@ export function msgTidakCocok(hosts: string[]): string {
   return `Angka dashboard tidak cocok untuk ${hosts.join(", ")}, sedang dicek`;
 }
 
+const MAKS_INPUT_TIDAK_VALID = 10;
+
 export function msgInputTidakValid(items: Array<{ tab: string; row: number; reason: string }>): string {
+  const sisa = items.length - MAKS_INPUT_TIDAK_VALID;
   return [
     "Ada isian spreadsheet yang tidak valid, jadi diabaikan bot:",
-    ...items.map((i) => `- ${i.tab} baris ${i.row}: ${i.reason}`),
+    ...items.slice(0, MAKS_INPUT_TIDAK_VALID).map((i) => `- ${i.tab} baris ${i.row}: ${i.reason}`),
+    ...(sisa > 0 ? [`dan ${sisa} lainnya (lihat Log Bot)`] : []),
     "Mohon diperbaiki di spreadsheet.",
   ].join("\n");
 }

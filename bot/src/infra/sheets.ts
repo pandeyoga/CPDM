@@ -376,6 +376,8 @@ export interface KoreksiRow {
   tanggal: string; host: string; masalah: string; angkaBot: string | number; usulan: string | number;
   jenis: "koreksi" | "atribusi" | "siaran_belum_lengkap";
   messageId: string; platform?: Platform; field?: CumulativeField; value?: number;
+  /** Kolom Atribusi terisi lebih dulu (atribusi ulang dari grup); owner tinggal memilih Setujui. */
+  atribusi?: string;
 }
 export interface GangguanRow { tanggal: string; host: string; mulai: string; selesai: string; alasan: string; sumber: string }
 export interface KehadiranRow { tanggal: string; host: string; jenis: "Sakit" | "Izin" | "Cuti" | "Telat"; alasan: string; sumber: string }
@@ -397,7 +399,7 @@ export type SheetOp =
   | { type: "appendLog"; at: Date; level: string; pesan: string };
 
 const koreksiCells = (r: KoreksiRow): NilaiSel[] => [
-  serialTanggal(r.tanggal), r.host, r.masalah, r.angkaBot, r.usulan, STATUS_MENUNGGU, "", r.messageId,
+  serialTanggal(r.tanggal), r.host, r.masalah, r.angkaBot, r.usulan, STATUS_MENUNGGU, r.atribusi ?? "", r.messageId,
   r.platform ?? "", r.jenis, r.field ?? "", r.value ?? "",
 ];
 

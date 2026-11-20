@@ -447,7 +447,13 @@ async function pagi(rt: Runtime): Promise<void> {
   if (rows.length > 0) {
     const kemarin = addDays(hari, -1);
     const gangguanKemarin = [...new Set(gangguan.filter((g) => g.date === kemarin && g.host !== "").map((g) => g.host))];
-    const r = await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgPagi(hari, rows, gangguanKemarin), {
+    const shift: Record<string, string> = {};
+    for (const j of jadwal ?? []) {
+      if (j.date !== hari) continue;
+      const jam = `${j.mulai}–${j.selesai}`;
+      shift[j.host] = shift[j.host] ? `${shift[j.host]}, ${jam}` : jam;
+    }
+    const r = await sendCapped(rt, rt.deps.config.LIVE_GROUP_ID, msgPagi(hari, rows, gangguanKemarin, shift), {
       mentions: waIds(settings, rows.map((x) => x.host)),
     });
     if (r === "gagal") return; // diulang menit berikutnya selama masih dalam jendela

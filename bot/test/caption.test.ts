@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchCaption, parseCommand, parseKoreksi } from "../src/domain/caption.js";
+import { matchCaption, parseCommand, parseKoreksi, parseKoreksiHost } from "../src/domain/caption.js";
 
 const hosts = ["Brando", "Vanna", "Linda"];
 
@@ -35,7 +35,13 @@ describe("parseCommand", () => {
   it("normal", () => expect(parseCommand("#normal", today)).toEqual({ kind: "normal" }));
   it("izin hari ini", () => expect(parseCommand("#izin sakit", today)).toEqual({ kind: "izin", date: "2026-11-20", alasan: "sakit" }));
   it("izin dengan tanggal", () => expect(parseCommand("#izin 25/11 keperluan keluarga", today)).toEqual({ kind: "izin", date: "2026-11-25", alasan: "keperluan keluarga" }));
-  it("izin d/m", () => expect(parseCommand("#izin 5/1 acara", today)).toEqual({ kind: "izin", date: "2026-01-05", alasan: "acara" }));
+  it("izin d/m", () => expect(parseCommand("#izin 5/12 acara", today)).toEqual({ kind: "izin", date: "2026-12-05", alasan: "acara" }));
+  it("M6: tanggal lebih dari 30 hari lalu → tahun depan", () => {
+    expect(parseCommand("#izin 5/1 acara", today)).toEqual({ kind: "izin", date: "2027-01-05", alasan: "acara" });
+    expect(parseCommand("#izin 21/10", today)).toEqual({ kind: "izin", date: "2026-10-21", alasan: "" }); // 30 hari lalu
+    expect(parseCommand("#izin 20/10", today)).toEqual({ kind: "izin", date: "2027-10-20", alasan: "" }); // 31 hari lalu
+    expect(parseCommand("#izin 10/11 telat", today)).toEqual({ kind: "izin", date: "2026-11-10", alasan: "telat" });
+  });
   it("tanggal tidak valid", () => expect(parseCommand("#izin 31/02 x", today)).toBeNull());
   it("bukan perintah", () => expect(parseCommand("halo", today)).toBeNull());
 });
@@ -65,5 +71,24 @@ describe("parseKoreksi", () => {
     expect(parseKoreksi("koreksi shopee")).toBeNull();
     expect(parseKoreksi("1.350.000 shopee")).toBeNull();
     expect(parseKoreksi("shopee 1,317")).toBeNull();
+  });
+});
+
+describe("parseKoreksiHost (I4)", () => {
+  const hosts = ["Brando", "Vanna", "Linda", "Maya Sari"];
+  it("koreksi host / host / bukan X, Y → nama host persis (tanpa beda huruf besar-kecil)", () => {
+    expect(parseKoreksiHost("koreksi host Vanna", hosts)).toBe("Vanna");
+    expect(parseKoreksiHost("host vanna", hosts)).toBe("Vanna");
+    expect(parseKoreksiHost("Koreksi Host: LINDA", hosts)).toBe("Linda");
+    expect(parseKoreksiHost("bukan Brando, Vanna", hosts)).toBe("Vanna");
+    expect(parseKoreksiHost("bukan brando, tapi vanna", hosts)).toBe("Vanna");
+    expect(parseKoreksiHost("host maya sari", hosts)).toBe("Maya Sari");
+  });
+  it("bukan nama host persis atau format lain → null", () => {
+    expect(parseKoreksiHost("host Vana", hosts)).toBeNull();
+    expect(parseKoreksiHost("host Budi", hosts)).toBeNull();
+    expect(parseKoreksiHost("Vanna", hosts)).toBeNull();
+    expect(parseKoreksiHost("koreksi shopee 1.350.000", hosts)).toBeNull();
+    expect(parseKoreksiHost("bukan Brando", hosts)).toBeNull();
   });
 });

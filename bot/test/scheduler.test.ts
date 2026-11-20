@@ -73,6 +73,7 @@ describe("pesan pagi", () => {
     const kirim = await menit(s, "2026-11-20", "07:55", "08:20");
     const pagi = kirim.filter((k) => k.chatId === GROUP);
     expect(pagi.map((k) => k.hm)).toEqual(["08:00"]);
+    expect(pagi[0]!.text).not.toContain("Shift"); // Jadwal aktif = TIDAK
     expect(pagi[0]!.text).toMatch(/^Selamat pagi tim! Update target 20\/11/);
     for (const h of ["Brando", "Vanna", "Linda"]) expect(pagi[0]!.text).toContain(h);
     expect(s.w.sent.find((m) => m.chatId === GROUP)!.mentions).toEqual([WA.Brando, WA.Vanna]);
@@ -88,6 +89,7 @@ describe("pesan pagi", () => {
     expect(kirim).toHaveLength(1);
     expect(kirim[0]!.text).toContain("Vanna");
     expect(kirim[0]!.text).not.toContain("Brando");
+    expect(kirim[0]!.text).toContain("Shift 09:00–15:00"); // I3: jam shift saat Jadwal aktif
     expect(s.w.sent[0]!.mentions).toEqual([WA.Vanna]);
   });
 

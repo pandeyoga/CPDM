@@ -1,4 +1,5 @@
 import { parseNum } from "./numbers.js";
+import { addDays } from "./time.js";
 import type { CumulativeField, Platform } from "./types.js";
 
 export type Command =
@@ -78,13 +79,33 @@ export function parseCommand(text: string, today: string): Command | null {
 
   const d = /^(\d{1,2})\/(\d{1,2})(?:\s+([\s\S]*))?$/.exec(rest);
   if (!d) return { kind: "izin", date: today, alasan: rest };
-  const day = Number(d[1]);
-  const month = Number(d[2]);
   const year = Number(today.slice(0, 4));
+  let date = tanggal(year, Number(d[2]), Number(d[1]));
+  // Lebih dari 30 hari lalu → maksudnya tahun depan (mis. "#izin 5/1" dikirim November).
+  if (date && date < addDays(today, -IZIN_MUNDUR_HARI)) date = tanggal(year + 1, Number(d[2]), Number(d[1]));
+  return date ? { kind: "izin", date, alasan: (d[3] ?? "").trim() } : null;
+}
+
+const IZIN_MUNDUR_HARI = 30;
+
+/** "YYYY-MM-DD" bila tanggal itu ada, selain itu null. */
+function tanggal(year: number, month: number, day: number): string | null {
   const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const valid = new Date(`${date}T00:00:00.000Z`);
   if (month < 1 || month > 12 || Number.isNaN(valid.getTime()) || valid.toISOString().slice(0, 10) !== date) return null;
-  return { kind: "izin", date, alasan: (d[3] ?? "").trim() };
+  return date;
+}
+
+/**
+ * Atribusi ulang laporan yang tercatat atas nama host yang salah: "koreksi host Vanna", "host Vanna", "bukan Brando,
+ * Vanna" (juga "bukan Brando, tapi Vanna"). Nama harus sama persis dengan nama host (tanpa beda huruf besar-kecil);
+ * selain itu null (tidak menebak).
+ */
+export function parseKoreksiHost(text: string, hosts: string[]): string | null {
+  const t = text.trim().replace(/[.!]+$/, "").trim();
+  const m = /^(?:koreksi\s+)?host\s*:?\s+(.+)$/iu.exec(t) ?? /^bukan\s+[^,]+,\s*(?:tapi\s+|tetapi\s+)?(.+)$/iu.exec(t);
+  const nama = m?.[1]?.trim().toLowerCase();
+  return nama ? (hosts.find((h) => h.toLowerCase() === nama) ?? null) : null;
 }
 
 export interface Koreksi { platform: Platform; field: Exclude<CumulativeField, "durasiDetik">; value: number }

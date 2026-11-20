@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  mention, msgAckKoreksi, msgAckPerintah, msgBelumLapor, msgEskalasi, msgFormatKoreksi, msgGambarHilang, msgGangguanDitutup,
-  msgInputTidakValid, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgTanda, msgTidakCocok, rp,
+  mention, msgAckAtribusi, msgAckKoreksi, msgAckPerintah, msgBelumLapor, msgEskalasi, msgFormatKoreksi, msgGambarHilang, msgGangguanDitutup,
+  msgInputTidakValid, msgKirimUlang, msgKoreksiTanpaPlatform, msgMintaRiwayat, msgOwner, msgPagi, msgRekap, msgSiapa, msgTanda,
+  msgTidakCocok, rp,
   rpRingkas, teksStatus,
 } from "../src/domain/messages.js";
 import type { HostSummary } from "../src/domain/rekap.js";
@@ -95,5 +96,75 @@ describe("pesan penjadwal (Task 12)", () => {
     expect(msgGangguanDitutup([{ tanggal: "2026-11-20", host: "", mulai: "14:00", selesai: "22:00" }]))
       .toContain("(host belum diisi)");
     expect(msgGambarHilang("Brando", "2026-11-20", "10:00")).toContain("Brando 20/11 pukul 10:00");
+  });
+});
+
+describe("fix wave: format dan pesan", () => {
+  it("I3: rpRingkas membawa batas satuan (999.950 → Rp1 jt)", () => {
+    expect(rpRingkas(999_950)).toBe("Rp1 jt");
+    expect(rpRingkas(999_499)).toBe("Rp999 rb");
+    expect(rpRingkas(999.6)).toBe("Rp1 rb");
+    expect(rpRingkas(-999_950)).toBe("−Rp1 jt");
+  });
+
+  it("I3: pesan pagi per host: realisasi, % vs seharusnya, selisih Rp, vs bulan lalu, jam shift", () => {
+    const t = msgPagi("2026-11-20", [
+      sum("Brando", { status: "warn", vsBulanLalu: 0.05 }),
+      sum("Vanna", { status: "ok", realisasi: 9_000_000, pctTarget: 0.9, selisih: 600_000, vsBulanLalu: null }),
+    ], [], { Brando: "09:00–17:00" });
+    const blok = t.slice(t.indexOf("*Brando*"), t.indexOf("*Vanna*"));
+    expect(blok).toContain("Rp5,6 jt");
+    expect(blok).toContain("66,7% dari yang seharusnya");
+    expect(blok).toContain("kurang Rp2,8 jt");
+    expect(blok).toContain("+5,0% vs bulan lalu");
+    expect(blok).toContain("Shift 09:00–17:00");
+    expect(blok).toContain("Ayo kejar Rp350 rb per hari kerja");
+    const vanna = t.slice(t.indexOf("*Vanna*"));
+    expect(vanna).toContain("lebih Rp600 rb");
+    expect(vanna).toContain("– vs bulan lalu");
+    expect(vanna).not.toContain("Shift");
+  });
+
+  it("I3: status warn/bad dapat satu baris lebih tegas (tidak mempermalukan); ok tidak", () => {
+    const t = msgPagi("2026-11-20", [sum("Brando", { status: "warn" }), sum("Rina", { status: "bad" }), sum("Dewi", { status: "ok" })], []);
+    expect(t.match(/Perlu dikejar hari ini/g)).toHaveLength(2);
+    expect(t.slice(t.indexOf("*Dewi*"))).not.toContain("Perlu dikejar");
+    expect(t.toLowerCase()).not.toMatch(/teguran|malas|payah|buruk/);
+  });
+
+  it("I3: butuh ≤ 0 → ucapan selamat, bukan 'Ayo kejar Rp0'; target bulan 0 → 'target bulan belum diisi'", () => {
+    const capai = msgPagi("2026-11-20", [sum("Brando", { status: "ok", realisasi: 10_500_000, pctTarget: 1.05, selisih: 2_100_000, butuhPerHariKerja: 0 })], []);
+    expect(capai).not.toContain("Ayo kejar");
+    expect(capai).not.toContain("Rp0");
+    expect(capai).toContain("Target bulan ini sudah tercapai, selamat!");
+
+    const tanpa = msgPagi("2026-11-20", [sum("Brando", { status: "ok", target: 0, seharusnya: 0, pctTarget: 0, selisih: 5_600_000, butuhPerHariKerja: 0 })], []);
+    expect(tanpa).toContain("target bulan belum diisi");
+    expect(tanpa).not.toContain("dari Rp0");
+    expect(tanpa).not.toContain("(0%)");
+    expect(tanpa).not.toContain("Ayo kejar");
+    expect(tanpa).not.toContain("selamat");
+  });
+
+  it("W11: pertanyaan caption persis 'Ini laporan siapa?'", () => {
+    expect(msgSiapa()).toBe("Ini laporan siapa?");
+  });
+
+  it("M7: input tak valid paling banyak 10 baris + 'dan N lainnya'", () => {
+    const items = Array.from({ length: 13 }, (_, i) => ({ tab: "Kehadiran", row: i + 2, reason: "Host kosong" }));
+    const t = msgInputTidakValid(items);
+    expect(t.split("\n").filter((b) => b.startsWith("- "))).toHaveLength(10);
+    expect(t).toContain("dan 3 lainnya");
+    expect(t).not.toContain("baris 12:");
+    expect(msgInputTidakValid(items.slice(0, 10))).not.toContain("lainnya");
+  });
+
+  it("M6: ack izin menampilkan dd/mm/yyyy", () => {
+    expect(msgAckPerintah({ kind: "izin", date: "2027-01-05", alasan: "acara" })).toContain("05/01/2027");
+  });
+
+  it("I4: ack atribusi ulang", () => {
+    expect(msgAckAtribusi("Vanna")).toBe("Atribusi ke Vanna dicatat, menunggu persetujuan owner.");
+    expect(msgFormatKoreksi()).toContain("koreksi host");
   });
 });

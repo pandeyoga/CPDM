@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { Config } from "../config.js";
-import { matchCaption, parseCommand, parseKoreksi, type Command } from "../domain/caption.js";
+import { matchCaption, parseCommand, parseKoreksi, parseKoreksiHost, type Command } from "../domain/caption.js";
 import { applyCorrections, buildLedger, type Correction } from "../domain/ledger.js";
 import {
-  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
+  msgAckAtribusi, msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
   msgMintaRiwayat, msgSiapa, msgTanda,
 } from "../domain/messages.js";
 import { addDays, jakartaDateTime, toJakartaDate, toJakartaHM } from "../domain/time.js";
@@ -17,8 +17,8 @@ import { cariBukti, unduhBukti } from "./bukti.js";
 /*
  * Orkestrasi satu pesan grup. Semua tulisan ke Sheets lewat db.outbox (tidak butuh gateway Sheets di sini).
  * Pesan bot yang balasannya penting dilacak di kv menurut id pesan terkirim (R35):
- *   receipt:<id> → messageId laporan (juga dipasang untuk id foto asli), siapa:<id> → messageId gambar tertunda,
- *   riwayat:<id> → {platform, host, beforeIso, afterIso, beforeDate, afterDate}.
+ *   receipt:<id> → messageId laporan (juga dipasang untuk id foto asli), siapa:<id> → messageId gambar tertunda
+ *   (juga dipasang untuk id gambar itu sendiri), riwayat:<id> → {platform, host, beforeIso, afterIso, beforeDate, afterDate}.
  * Gambar tidak pernah hilang setelah markMessage: konteksnya (kv gambar:<messageId>) dan antrean pendingExtract
  * (atau pendingCaption) ditulis sebelum unduh/ekstraksi dan baru dilepas pada hasil akhir (tersimpan atau ditolak).
  * Pertanyaan "siapa" yang belum terkirim (gagal kirim, atau proses mati sebelum bertanya) diulang oleh retryPending.
@@ -167,6 +167,7 @@ async function tanyaSiapa(g: Gambar, deps: HandleDeps): Promise<void> {
   g = { ...g, ditanya: false };
   simpanKonteks(db, g);
   db.pendingCaption.put(g.messageId, g.mediaUrl, g.caption);
+  lacak(db, "siapa", g.messageId, g.messageId); // balasan nama host ke gambarnya sendiri juga menjawab
   db.logProblem(g.messageId, null, toJakartaDate(new Date(g.receivedAt)), "caption");
   if (!adaBerkas(g)) {
     try {
@@ -336,18 +337,21 @@ async function kirimTandaTerima(g: GambarSiap, at: Date, deps: HandleDeps): Prom
 async function balasanTeks(m: Incoming, replyToId: string, deps: HandleDeps): Promise<void> {
   const k = kunci(replyToId);
   const tertunda = deps.db.getKv(`siapa:${k}`);
-  if (tertunda) return jawabSiapa(m, tertunda, deps);
+  if (tertunda && bacaJson<Gambar & { host?: string }>(deps.db, `gambar:${tertunda}`)?.host === undefined) {
+    return jawabSiapa(m, tertunda, k === kunci(tertunda), deps);
+  }
   const laporan = deps.db.getKv(`receipt:${k}`);
   if (laporan) return koreksi(m, laporan, deps);
 }
 
-async function jawabSiapa(m: Incoming, msgId: string, deps: HandleDeps): Promise<void> {
+/** `keGambar`: balasan ke gambar itu sendiri (bukan ke pertanyaan bot); tanpa nama host diabaikan, tidak ditanya ulang. */
+async function jawabSiapa(m: Incoming, msgId: string, keGambar: boolean, deps: HandleDeps): Promise<void> {
   const { db } = deps;
   const g = bacaJson<Gambar & { host?: string }>(db, `gambar:${msgId}`);
   if (!g || g.host !== undefined) return; // sudah dijawab
   const cocok = matchCaption(m.text, namaHost(deps.settings));
   if ("error" in cocok) {
-    lacak(db, "siapa", await kirim(deps, msgSiapa(), m.id), msgId);
+    if (!keGambar) lacak(db, "siapa", await kirim(deps, msgSiapa(), m.id), msgId);
     return;
   }
   const isMati = cocok.isMati || /(^|[^\p{L}\p{N}])mati($|[^\p{L}\p{N}])/iu.test(g.caption);
@@ -360,6 +364,8 @@ async function jawabSiapa(m: Incoming, msgId: string, deps: HandleDeps): Promise
 
 /** Koreksi tidak pernah langsung berlaku: baris Koreksi berstatus Menunggu sampai owner memilih Setujui. */
 async function koreksi(m: Incoming, messageId: string, deps: HandleDeps): Promise<void> {
+  const host = parseKoreksiHost(m.text, namaHost(deps.settings));
+  if (host) return atribusiUlang(m, messageId, host, deps);
   const k = parseKoreksi(m.text);
   if (!k) {
     // Hanya balasan yang jelas dimaksudkan sebagai koreksi yang dijawab dengan format; "makasih" dll. diabaikan.
@@ -382,14 +388,37 @@ async function koreksi(m: Incoming, messageId: string, deps: HandleDeps): Promis
   await kirim(deps, msgAckKoreksi(k.platform), m.id);
 }
 
-/** Laporan dicari di bulan balasan dan bulan sebelumnya. */
-function cariLaporan(db: Db, messageId: string, platform: Platform, ts: Date): Report | undefined {
+/**
+ * "koreksi host Vanna" / "bukan Brando, Vanna": satu baris Koreksi & Atribusi per platform laporan itu, kolom
+ * Atribusi sudah terisi nama host dan Keputusan Menunggu (owner tinggal memilih Setujui).
+ */
+async function atribusiUlang(m: Incoming, messageId: string, host: string, deps: HandleDeps): Promise<void> {
+  const laporan = laporanPesan(deps.db, messageId, m.ts);
+  for (const r of laporan) {
+    deps.db.outbox.push({
+      type: "appendKoreksi",
+      row: {
+        tanggal: toJakartaDate(waktu(r)), host: r.host, masalah: `Atribusi dari grup: "${m.text.trim()}"`,
+        angkaBot: r.reading.omzet?.value ?? "", usulan: host, jenis: "atribusi", messageId, platform: r.reading.platform,
+        atribusi: host,
+      },
+    });
+  }
+  if (laporan.length > 0) await kirim(deps, msgAckAtribusi(host), m.id);
+}
+
+/** Laporan (semua platform) satu pesan, dicari di bulan balasan dan bulan sebelumnya. */
+function laporanPesan(db: Db, messageId: string, ts: Date): Report[] {
   const bulan = toJakartaDate(ts).slice(0, 7);
   for (const b of [bulan, addDays(`${bulan}-01`, -1).slice(0, 7)]) {
-    const r = db.reports(b).find((x) => x.messageId === messageId && x.reading.platform === platform);
-    if (r) return r;
+    const r = db.reports(b).filter((x) => x.messageId === messageId);
+    if (r.length > 0) return r;
   }
-  return undefined;
+  return [];
+}
+
+function cariLaporan(db: Db, messageId: string, platform: Platform, ts: Date): Report | undefined {
+  return laporanPesan(db, messageId, ts).find((x) => x.reading.platform === platform);
 }
 
 /* ---------- Perintah ---------- */

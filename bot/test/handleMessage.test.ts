@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { handleMessage, retryPending, type HandleDeps } from "../src/app/handleMessage.js";
 import { buildLedger } from "../src/domain/ledger.js";
 import {
-  msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
+  msgAckAtribusi, msgAckKoreksi, msgAckPerintah, msgDiproses, msgFormatKoreksi, msgGambarHilang, msgKirimUlang, msgKoreksiTanpaPlatform,
   msgMintaRiwayat, msgSiapa,
 } from "../src/domain/messages.js";
 import { jakartaDateTime } from "../src/domain/time.js";
@@ -839,5 +839,62 @@ describe("handleMessage: fix wave (M3, I1)", () => {
     await handleMessage(m, t.deps);
     expect(t.unduhan.n).toBe(0);
     expect(t.db.reports("2026-11")).toHaveLength(1);
+  });
+});
+
+describe("handleMessage: fix wave (I4 atribusi ulang, M5 jawaban ke gambar)", () => {
+  it("I4: 'koreksi host Vanna' ke tanda terima → satu baris atribusi per platform, Atribusi terisi, Keputusan Menunggu", async () => {
+    const t = setup();
+    t.hasil.push(ok(shopee(1_317_034), tiktok(578_000)));
+    const m = img("Brando", jam("10:00"));
+    await handleMessage(m, t.deps);
+    const n = t.ops().length;
+    const balas = txt("koreksi host Vanna", jam("10:05"), { replyToId: t.sent[0]!.id });
+    await handleMessage(balas, t.deps);
+    const baru = t.ops().slice(n);
+    expect(baru).toEqual([
+      { type: "appendKoreksi", row: expect.objectContaining({
+        tanggal: "2026-11-20", host: "Brando", jenis: "atribusi", messageId: m.id, platform: "shopee", atribusi: "Vanna", usulan: "Vanna",
+      }) },
+      { type: "appendKoreksi", row: expect.objectContaining({
+        jenis: "atribusi", messageId: m.id, platform: "tiktok", atribusi: "Vanna",
+      }) },
+    ]);
+    expect(t.terakhir()).toMatchObject({ text: msgAckAtribusi("Vanna"), replyTo: balas.id });
+    const rows = await flushKeSheets(baru);
+    expect(rows[0]?.values[0]?.slice(5, 10)).toEqual(["Menunggu", "Vanna", m.id, "shopee", "atribusi"]);
+  });
+
+  it("I4: 'bukan Brando, Vanna' ke foto asli juga diterima; nama bukan host persis → tidak dicatat", async () => {
+    const t = setup();
+    t.hasil.push(ok(shopee(1_317_034)));
+    const m = img("Brando", jam("10:00"));
+    await handleMessage(m, t.deps);
+    const n = t.ops().length;
+    await handleMessage(txt("bukan Brando, Vanna", jam("10:05"), { replyToId: m.id.split("_")[2] }), t.deps);
+    expect(t.ops().slice(n)).toEqual([{ type: "appendKoreksi", row: expect.objectContaining({ atribusi: "Vanna", platform: "shopee" }) }]);
+    await handleMessage(txt("koreksi host Vana", jam("10:06"), { replyToId: t.sent[0]!.id }), t.deps);
+    expect(t.ops()).toHaveLength(n + 1);
+    expect(t.terakhir().text).toBe(msgFormatKoreksi());
+  });
+
+  it("M5: balasan nama host ke gambarnya sendiri menyelesaikan gambar yang menunggu nama; koreksi sesudahnya tetap jalan", async () => {
+    const t = setup();
+    const m = img("", jam("10:00"));
+    await handleMessage(m, t.deps);
+    expect(t.sent.map((x) => x.text)).toEqual([msgSiapa()]);
+
+    // Balasan tanpa nama host ke gambar: diabaikan (tidak ditanya ulang).
+    await handleMessage(txt("ini yang tadi", jam("10:01"), { replyToId: m.id }), t.deps);
+    expect(t.sent).toHaveLength(1);
+
+    t.hasil.push(ok(shopee(1_317_034)));
+    await handleMessage(txt("Vanna", jam("10:02"), { replyToId: m.id.split("_")[2] }), t.deps);
+    expect(t.db.reports("2026-11")).toEqual([expect.objectContaining({ messageId: m.id, host: "Vanna" })]);
+    expect(t.db.pendingCaption.all()).toEqual([]);
+
+    await handleMessage(txt("koreksi shopee 1.350.000", jam("10:05"), { replyToId: m.id }), t.deps);
+    expect(t.terakhir().text).toBe(msgAckKoreksi("shopee"));
+    expect(t.ops().filter((o) => o.type === "appendKoreksi")).toHaveLength(1);
   });
 });
