@@ -117,5 +117,23 @@ printf '%s\n' "$hdr" > "$PROC_NET_TCP"; : > "$PROC_NET_TCP6"; : > "$ENV_FILE"
 pilih_port_waha >/dev/null
 cek "pilih port: 3000 bila bebas" "3000" "$(get_env WAHA_PORT)"
 
+# --- galat_waha_terakhir: tidak boleh menghentikan skrip (set -e + pipefail) bila log tanpa ERROR ---
+dc() { printf '%s\n' '[05:30:01.000] INFO (7): [Manager] Session started' '[05:30:02.000] WARN (WhatsappSession/7): Failed QR item event'; }
+hasil=$( (set -Eeuo pipefail; trap 'echo TERHENTI' ERR; g="$(galat_waha_terakhir)"; echo "lanjut:[$g]") 2>&1 )
+cek "galat_waha_terakhir: log tanpa ERROR -> kosong, skrip lanjut" "lanjut:[]" "$hasil"
+dc() { printf '%s\n' $'\x1b[31mERROR\x1b[39m (WhatsappSession/48): session:default - Waiting failed {"session":"default"}'; }
+hasil=$( (set -Eeuo pipefail; g="$(galat_waha_terakhir)"; echo "[$g]") 2>&1 )
+cek "galat_waha_terakhir: ambil baris ERROR (tanpa warna)" "[ERROR (WhatsappSession/48): session:default - Waiting failed]" "$hasil"
+
+# --- daftar_grup: WAHA menjawab galat (curl -f gagal) tidak boleh menghentikan skrip ---
+waha_get() { return 22; }
+hasil=$( (set -Eeuo pipefail; trap 'echo TERHENTI' ERR; d="$(daftar_grup)"; echo "lanjut:[$d]") 2>&1 )
+cek "daftar_grup: WAHA galat -> kosong, skrip lanjut" "lanjut:[]" "$hasil"
+
+# --- on_error: satu laporan saja walau galat terjadi di dalam $(...) bertingkat ---
+# shellcheck disable=SC2016
+hasil=$(bash -c 'source ./install.sh; set -Eeuo pipefail; trap "on_error \$LINENO" ERR; f() { local x; x="$(false | grep a)"; echo "$x"; }; g() { f; }; g' 2>&1 | grep -c "Pemasangan berhenti")
+cek "on_error: dilaporkan sekali" "1" "$hasil"
+
 if (( GAGAL > 0 )); then printf '\n%d uji GAGAL\n' "$GAGAL"; exit 1; fi
 printf '\nSemua uji lulus\n'

@@ -147,9 +147,12 @@ cara_ulang() {
 
 on_error() {
   local line="$1"
+  # Dengan set -E trap juga jalan di subshell $(...) dan di tiap tingkat fungsi; cukup lapor sekali, di shell utama.
+  (( BASH_SUBSHELL == 0 )) || return 0
   err "Pemasangan berhenti (baris $line). Baca pesan di atas."
   info "Langkah yang sudah selesai tidak diulang. Setelah masalah diperbaiki, jalankan lagi:"
   info "  $(cara_ulang)"
+  exit 1
 }
 
 # apt-get yang sabar: VPS baru sering menjalankan pembaruan otomatis yang mengunci apt beberapa menit.
@@ -194,7 +197,7 @@ preflight() {
   fi
   if command -v docker >/dev/null 2>&1; then
     local lain
-    lain=$(docker ps -q 2>/dev/null | wc -l)
+    lain=$(docker ps -q 2>/dev/null | wc -l || true)
     (( lain == 0 )) || info "Ada $lain container lain yang berjalan. Pemasang ini tidak menghentikan, memperbarui, atau menghapusnya."
   fi
   local cek_dir="$INSTALL_DIR"
@@ -416,13 +419,13 @@ tampilkan_qr() {
 galat_waha_terakhir() {
   dc logs --no-color --no-log-prefix --tail 400 waha 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' \
     | grep -E '(ERROR|FATAL) \(' | grep -v 'WebhookSender' | tail -1 \
-    | sed -E 's/^\[[0-9:.]+\] //; s/ \{"session".*$//' | cut -c1-200
+    | sed -E 's/^\[[0-9:.]+\] //; s/ \{"session".*$//' | cut -c1-200 || true  # grep tanpa hasil + pipefail
 }
 
 DIAGNOSA_CMD="curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/diagnosa-waha.sh | sudo bash"
 
 sambungkan_whatsapp() {
-  local paksa="${1:-0}" status="" i t0 detik pernah_qr=0 gagal_terlapor=0 galat
+  local paksa="${1:-0}" status="" i t0 detik pernah_qr=0 gagal_terlapor=0 kedaluwarsa_terlapor=0 galat
   info "Menjalankan WAHA (pertama kali mengunduh image sekitar 1 GB, bisa beberapa menit)..."
   if ! dc up -d waha >/dev/null; then
     err "Gagal menjalankan WAHA. Penyebabnya tertulis di atas."
@@ -448,7 +451,13 @@ sambungkan_whatsapp() {
       STOPPED|"") waha_post "/api/sessions/$SESI/start" 2>/dev/null || true; sleep 3 ;;
       FAILED)
         # WAHA sendiri memulai ulang sesi sekitar 2 detik setelah gagal; me-restart container justru mengganggu.
-        if (( gagal_terlapor == 0 )); then
+        if (( pernah_qr == 1 )); then
+          # GOWS: QR yang tidak di-scan sekitar 3 menit kedaluwarsa (status FAILED sebentar), lalu QR baru dibuat.
+          if (( kedaluwarsa_terlapor == 0 )); then
+            warn "QR kedaluwarsa karena belum di-scan. QR baru sedang dibuat, tunggu sebentar..."
+            kedaluwarsa_terlapor=1
+          fi
+        elif (( gagal_terlapor == 0 )); then
           galat="$(galat_waha_terakhir)"
           warn "Sesi WhatsApp gagal dimulai; WAHA mencoba lagi sendiri.${galat:+ Penyebab: $galat}"
           gagal_terlapor=1
@@ -457,6 +466,7 @@ sambungkan_whatsapp() {
         ;;
       SCAN_QR_CODE)
         pernah_qr=1
+        kedaluwarsa_terlapor=0
         tampilkan_qr
         for ((i = 0; i < 7; i++)); do
           sleep 3
@@ -474,8 +484,8 @@ sambungkan_whatsapp() {
       info "  $DIAGNOSA_CMD"
       return 1
     fi
-    if (( detik > 300 )); then
-      err "5 menit berlalu tetapi WhatsApp belum tersambung."
+    if (( detik > 600 )); then
+      err "10 menit berlalu tetapi WhatsApp belum tersambung."
       info "Ulangi hanya langkah ini:  $(cara_ulang --qr)"
       info "Bila tetap gagal, jalankan diagnosa:  $DIAGNOSA_CMD"
       return 1
@@ -501,8 +511,8 @@ langkah_whatsapp() {
 # ---------- 5. grup ----------
 daftar_grup() { # stdout: "id<TAB>nama" per baris; cadangan lewat daftar chat bila /groups kosong
   local hasil
-  hasil=$(waha_get "/api/$SESI/groups" 2>/dev/null | saring_grup)
-  [[ -n "$hasil" ]] || hasil=$(waha_get "/api/$SESI/chats?limit=100" 2>/dev/null | saring_grup)
+  hasil=$(waha_get "/api/$SESI/groups" 2>/dev/null | saring_grup || true)
+  [[ -n "$hasil" ]] || hasil=$(waha_get "/api/$SESI/chats?limit=100" 2>/dev/null | saring_grup || true)
   printf '%s' "$hasil"
 }
 
