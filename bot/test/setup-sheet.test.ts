@@ -3,7 +3,7 @@ import type { sheets_v4 } from "googleapis";
 import { describe, expect, it, vi } from "vitest";
 import {
   a1ToGrid, formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint,
-  spreadsheetPropsRequest, tabCells, tabCellsTerpisah, tabRequests, validationRequests, valueRanges, NAMED_RANGES,
+  spreadsheetPropsRequest, tabCells, tabCellsTerpisah, tabRequests, validationRequests, valueRanges, NAMED_RANGES, LOCALE_RUMUS,
 } from "../src/infra/sheetBlueprint.js";
 import { dashboardFormulas, type Layout } from "../src/domain/sheetFormulas.js";
 import { PRESETS } from "../src/domain/period.js";
@@ -109,10 +109,12 @@ describe("penyusun request", () => {
     expect(h.updateSheetProperties).toMatchObject({ properties: { sheetId: ids.get("Kontrol"), hidden: true }, fields: "hidden" });
   });
 
-  it("spreadsheetPropsRequest: zona dan locale", () => {
+  it("spreadsheetPropsRequest: zona dan locale (in_ID tampilan; en_US saat menulis rumus)", () => {
+    // Google menolak "id_ID" (Unsupported locale); kode Indonesia di Sheets adalah "in_ID".
     expect(spreadsheetPropsRequest().updateSpreadsheetProperties).toEqual({
-      properties: { timeZone: "Asia/Jakarta", locale: "id_ID" }, fields: "timeZone,locale",
+      properties: { timeZone: "Asia/Jakarta", locale: "in_ID" }, fields: "timeZone,locale",
     });
+    expect(spreadsheetPropsRequest(LOCALE_RUMUS).updateSpreadsheetProperties!.properties!.locale).toBe("en_US");
   });
 
   it("named range DAFTAR_HOST dan HARI_INI; yang lama dihapus dulu", () => {
@@ -417,5 +419,54 @@ describe("ukuran grid tab fakta", () => {
   it("setupSheet: jalan ulang saat tab sudah besar tidak menambah perubahan ukuran", async () => {
     const { reqs } = await jalankan((t) => MIN[t] ?? 1_000);
     expect(reqs.filter((r) => r.updateSheetProperties?.fields === "gridProperties.rowCount")).toEqual([]);
+  });
+});
+
+describe("setupSheet: rumus ditulis saat locale en_US, lalu locale in_ID", () => {
+  // Di locale in_ID Google membaca rumus kiriman API dengan pemisah ";" (diuji di Sheets asli: koma → #ERROR!).
+  // Rumus yang sudah tersimpan tetap benar saat locale diganti sesudahnya.
+  async function urutan(spreadsheetId?: string) {
+    const { setupSheet } = await import("../scripts/setup-sheet.js");
+    const titles = sheetBlueprint().map((t) => t.title);
+    const log: string[] = [];
+    let localeBuat: string | undefined;
+    const sheets = {
+      spreadsheets: {
+        create: async (a: { requestBody: { properties: { locale: string } } }) => { localeBuat = a.requestBody.properties.locale; return { data: { spreadsheetId: "SID" } }; },
+        get: async () => ({ data: { sheets: titles.map((title, i) => ({ properties: { sheetId: 100 + i, title } })), namedRanges: [] } }),
+        batchUpdate: async (a: { requestBody: { requests: Array<Record<string, any>> } }) => {
+          for (const r of a.requestBody.requests) {
+            const loc = r.updateSpreadsheetProperties?.properties?.locale;
+            if (loc) log.push(`locale:${loc}`);
+          }
+          log.push("batchUpdate");
+        },
+        values: {
+          batchGet: async () => ({ data: { valueRanges: [] } }),
+          batchUpdate: async (a: { requestBody: { valueInputOption: string } }) => void log.push(`values:${a.requestBody.valueInputOption}`),
+        },
+      },
+    };
+    const drive = {
+      about: { get: async () => ({ data: { user: { emailAddress: "o@example.com" } } }) },
+      files: { list: async () => ({ data: { files: [] } }), create: async () => ({ data: { id: "FID" } }) },
+    };
+    await setupSheet(sheets as never, drive as never, spreadsheetId ? { spreadsheetId, buktiFolderId: "F" } : { buktiFolderId: "F" });
+    return { log, localeBuat };
+  }
+
+  it("spreadsheet baru dibuat dengan en_US; in_ID dipasang sesudah semua nilai ditulis", async () => {
+    const { log, localeBuat } = await urutan();
+    expect(localeBuat).toBe("en_US");
+    expect(log.indexOf("values:USER_ENTERED")).toBeGreaterThan(-1);
+    expect(log.lastIndexOf("locale:in_ID")).toBeGreaterThan(log.indexOf("values:USER_ENTERED"));
+    expect(log.indexOf("locale:in_ID")).toBe(log.lastIndexOf("locale:in_ID"));
+  });
+
+  it("jalan ulang pada spreadsheet yang sudah in_ID: locale dikembalikan ke en_US sebelum rumus ditulis", async () => {
+    const { log } = await urutan("SID");
+    expect(log.indexOf("locale:en_US")).toBeGreaterThan(-1);
+    expect(log.indexOf("locale:en_US")).toBeLessThan(log.indexOf("values:USER_ENTERED"));
+    expect(log[log.length - 2]).toBe("locale:in_ID");
   });
 });

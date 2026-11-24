@@ -39,7 +39,14 @@ export interface TabBlueprint {
 }
 
 export const ZONA_WAKTU = "Asia/Jakarta";
-export const LOCALE = "id_ID";
+/**
+ * Locale tampilan: Indonesia (Rp1.234.567, 12,5%, tanggal dd/mm). Kode Sheets untuk Indonesia adalah "in_ID";
+ * "id_ID" ditolak API ("Unsupported locale"). Di locale ini Sheets membaca rumus kiriman API dengan pemisah ";",
+ * jadi rumus (berpemisah koma) ditulis selagi locale LOCALE_RUMUS, lalu LOCALE dipasang sesudahnya. Rumus yang
+ * tersimpan tetap benar saat locale diganti (diuji di Google Sheets asli, 24-11-2026).
+ */
+export const LOCALE = "in_ID";
+export const LOCALE_RUMUS = "en_US";
 export const MAX_BARIS_OWNER = 60;
 const PROTECT_PREFIX = "CP: ";
 
@@ -290,8 +297,8 @@ export function resolveSheetIds(bp: TabBlueprint[], existing: ReadonlyMap<string
   return ids;
 }
 
-export function spreadsheetPropsRequest(): Request {
-  return { updateSpreadsheetProperties: { properties: { timeZone: ZONA_WAKTU, locale: LOCALE }, fields: "timeZone,locale" } };
+export function spreadsheetPropsRequest(locale: string = LOCALE): Request {
+  return { updateSpreadsheetProperties: { properties: { timeZone: ZONA_WAKTU, locale }, fields: "timeZone,locale" } };
 }
 
 /**
