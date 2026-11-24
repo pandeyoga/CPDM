@@ -42,7 +42,7 @@
   - Rekap 22:30, atau 30 menit setelah laporan terakhir kalau lewat 22:00
   - Batas jeda laporan tidak wajar 240 menit
   - Batas pesan bot per orang per hari 6. Balasan konfirmasi tidak ikut dihitung.
-- **Model Claude:** `claude-opus-5-5`, `output_config.effort: "medium"`. Dipanggil lewat `client.beta.messages.create` dengan `betas: ["server-side-fallback-2026-07-01"]` dan `fallbacks: "default"`. Cek `stop_reason === "refusal"` sebelum membaca isi.
+- **Model Claude:** `claude-sonnet-5-5` (diganti dari claude-opus-5-5 atas permintaan owner, 24 Nov 2026), `output_config.effort: "medium"`. Dipanggil lewat `client.beta.messages.create` dengan `betas: ["server-side-fallback-2026-07-01"]` dan `fallbacks: "default"`. Cek `stop_reason === "refusal"` sebelum membaca isi.
 - **Rahasia** (API key, refresh token, key WAHA) hanya ada di `.env` di VPS. Tidak pernah masuk ke git atau chat.
 - **Laporan pergantian dibuat per platform.** Satu gambar bisa berisi satu atau dua platform.
 - **Filter periode di setiap tab dashboard dan analisis** (rancangan 8a-2):
@@ -583,7 +583,7 @@ toKreditRows(entries: LedgerEntry[], attributions, expected: Map<string, number>
 
 **Ketentuan:**
 - **Skema keluaran (zod):** `{ jenis: "layar_live" | "bukan_layar_live" | "tidak_terbaca", platforms: Array<{ platform, screen, ...field PlatformReading dalam bentuk string mentah seperti tertulis di layar } > }`. Angka mentah diubah dengan `parseNum` atau `parseDurasi` (Task 2) di kode, bukan oleh model.
-- **Panggilan API:** `client.beta.messages.create` dengan model `claude-opus-5-5`, `max_tokens` 16000, `output_config: { effort: "medium", format: zodOutputFormat(Skema) }`, `betas: ["server-side-fallback-2026-07-01"]`, dan `fallbacks: "default"`. Gambar dikirim sebagai blok `image` base64 sebelum teks.
+- **Panggilan API:** `client.beta.messages.create` dengan model `claude-sonnet-5-5` (diganti dari claude-opus-5-5 atas permintaan owner, 24 Nov 2026), `max_tokens` 16000, `output_config: { effort: "medium", format: zodOutputFormat(Skema) }`, `betas: ["server-side-fallback-2026-07-01"]`, dan `fallbacks: "default"`. Gambar dikirim sebagai blok `image` base64 sebelum teks.
 - **Isi prompt:**
   - Daftar label per platform.
   - Shopee: Penjualan, Pesanan Dibuat, Dilihat, Komentar, Masukkan ke Keranjang, Penonton Aktif, Durasi Rata-rata Menonton, Durasi.

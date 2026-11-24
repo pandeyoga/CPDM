@@ -67,7 +67,7 @@ describe("ClaudeExtractor", () => {
     calls.length = 0;
     await new ClaudeExtractor(ok({ jenis: "layar_live", platforms: [shopee] })).extract(img, "image/jpeg");
     const a = calls[0];
-    expect(a.model).toBe("claude-opus-5-5");
+    expect(a.model).toBe("claude-sonnet-5-5");
     expect(a.betas).toEqual(["server-side-fallback-2026-07-01"]);
     expect(a.fallbacks).toBe("default");
     expect(a.output_config.effort).toBe("medium");

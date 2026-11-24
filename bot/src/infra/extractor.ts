@@ -77,7 +77,7 @@ export class ClaudeExtractor implements Extractor {
     let response;
     try {
       response = await this.client.beta.messages.create({
-        model: "claude-opus-5-5",
+        model: "claude-sonnet-5-5",
         max_tokens: 16000,
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
