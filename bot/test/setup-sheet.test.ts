@@ -470,3 +470,21 @@ describe("setupSheet: rumus ditulis saat locale en_US, lalu locale in_ID", () =>
     expect(log[log.length - 2]).toBe("locale:in_ID");
   });
 });
+
+describe("Analisis Live: semua angka diberi format (diperiksa di Sheets asli: '62385', '98,33816425')", () => {
+  const f = sheetBlueprint().find((t) => t.title === "Analisis Live")!.formats!;
+  it("hitungan corong: pemisah ribuan", () => {
+    expect(f).toContainEqual({ range: "B7:B10", kind: "bilangan" });
+    expect(f).toContainEqual({ range: "E7:E11", kind: "bilangan" });
+  });
+  it("per host: komentar/jam satu desimal, indeks slot dua desimal", () => {
+    expect(f).toContainEqual({ range: "F20:F29", kind: "desimal" });
+    expect(f).toContainEqual({ range: "G20:G29", kind: "indeks" });
+  });
+  it("pola format bilangan dan indeks", () => {
+    const ids = resolveSheetIds(sheetBlueprint(), new Map());
+    const pola = formatRequests(sheetBlueprint(), ids).map((r) => r.repeatCell!.cell!.userEnteredFormat!.numberFormat!.pattern);
+    expect(pola).toContain("#,##0");
+    expect(pola).toContain("0.00");
+  });
+});

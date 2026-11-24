@@ -15,7 +15,7 @@ import {
 
 export type ValidationKind = "list" | "date" | "custom" | "range";
 export interface Validation { range: string; kind: ValidationKind; values?: string[]; formula?: string; pesan?: string }
-export type FormatKind = "rupiah" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "sembunyi";
+export type FormatKind = "rupiah" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "bilangan" | "indeks" | "sembunyi";
 export interface TabFormat { range: string; kind: FormatKind }
 export type CellValue = string | number;
 
@@ -125,7 +125,9 @@ function analisisLive(): TabBlueprint {
   t.formats!.push(
     { range: "B6", kind: "rupiah" }, { range: "B11:B13", kind: "persen" }, { range: "B14:B15", kind: "rupiah" }, { range: "B16", kind: "persen" },
     { range: "E6", kind: "rupiah" }, { range: "E12:E13", kind: "persen" }, { range: "E14", kind: "rupiah" }, { range: "E15", kind: "persen" },
-    { range: "B20:C29", kind: "rupiah" }, { range: "D20:E29", kind: "persen" }, { range: "B33:Y34", kind: "rupiah" },
+    { range: "B7:B10", kind: "bilangan" }, { range: "E7:E11", kind: "bilangan" },
+    { range: "B20:C29", kind: "rupiah" }, { range: "D20:E29", kind: "persen" }, { range: "F20:F29", kind: "desimal" },
+    { range: "G20:G29", kind: "indeks" }, { range: "B33:Y34", kind: "rupiah" },
     { range: "AA5:AB96", kind: "sembunyi" },
   );
   return {
@@ -371,6 +373,8 @@ const FORMAT: Record<FormatKind, { type: string; pattern: string }> = {
   bulan: { type: "DATE", pattern: "mmm yyyy" },
   jam: { type: "TIME", pattern: "HH:mm" },
   desimal: { type: "NUMBER", pattern: "#,##0.0" },
+  bilangan: { type: "NUMBER", pattern: "#,##0" },
+  indeks: { type: "NUMBER", pattern: "0.00" },
   sembunyi: { type: "NUMBER", pattern: ";;;" },
 };
 
