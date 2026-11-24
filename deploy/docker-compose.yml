@@ -15,9 +15,10 @@ services:
       WHATSAPP_HOOK_EVENTS: message,session.status
       # Harus SAMA dengan WAHA_HMAC_KEY milik bot; bot menolak webhook yang tanda tangannya tidak cocok.
       WHATSAPP_HOOK_HMAC_KEY: ${WAHA_HMAC_KEY:?isi WAHA_HMAC_KEY di .env}
-      # Umur berkas media (detik) sebelum dihapus WAHA. VERIFIKASI nama variabel ini di Task 0
-      # (bandingkan dengan dokumentasi/versi WAHA yang terpasang).
+      # Umur berkas media (detik) sebelum dihapus WAHA (nama variabel sudah diverifikasi dari kode WAHA).
       WHATSAPP_FILES_LIFETIME: "3600"
+      # Simpan media di folder yang dipasangi volume waha_media (bawaan WAHA: /tmp/whatsapp-files, tidak awet).
+      WHATSAPP_FILES_FOLDER: /app/.media
       # Sesi "default" otomatis hidup lagi setelah restart (tidak perlu scan QR ulang selama sesi masih sah).
       WHATSAPP_START_SESSION: default
       WHATSAPP_RESTART_ALL_SESSIONS: "true"
