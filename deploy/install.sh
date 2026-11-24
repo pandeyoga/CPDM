@@ -412,8 +412,17 @@ tampilkan_qr() {
   fi
 }
 
+# Satu baris galat terakhir dari log WAHA (tanpa log webhook), untuk ditunjukkan ke pemilik.
+galat_waha_terakhir() {
+  dc logs --no-color --no-log-prefix --tail 400 waha 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' \
+    | grep -E '(ERROR|FATAL) \(' | grep -v 'WebhookSender' | tail -1 \
+    | sed -E 's/^\[[0-9:.]+\] //; s/ \{"session".*$//' | cut -c1-200
+}
+
+DIAGNOSA_CMD="curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/diagnosa-waha.sh | sudo bash"
+
 sambungkan_whatsapp() {
-  local paksa="${1:-0}" status="" i t0 detik
+  local paksa="${1:-0}" status="" i t0 detik pernah_qr=0 gagal_terlapor=0 galat
   info "Menjalankan WAHA (pertama kali mengunduh image sekitar 1 GB, bisa beberapa menit)..."
   if ! dc up -d waha >/dev/null; then
     err "Gagal menjalankan WAHA. Penyebabnya tertulis di atas."
@@ -438,11 +447,16 @@ sambungkan_whatsapp() {
       WORKING) break ;;
       STOPPED|"") waha_post "/api/sessions/$SESI/start" 2>/dev/null || true; sleep 3 ;;
       FAILED)
-        warn "Sesi WhatsApp gagal; memulai ulang WAHA..."
-        dc restart waha >/dev/null || true
-        sleep 10
+        # WAHA sendiri memulai ulang sesi sekitar 2 detik setelah gagal; me-restart container justru mengganggu.
+        if (( gagal_terlapor == 0 )); then
+          galat="$(galat_waha_terakhir)"
+          warn "Sesi WhatsApp gagal dimulai; WAHA mencoba lagi sendiri.${galat:+ Penyebab: $galat}"
+          gagal_terlapor=1
+        fi
+        sleep 5
         ;;
       SCAN_QR_CODE)
+        pernah_qr=1
         tampilkan_qr
         for ((i = 0; i < 7; i++)); do
           sleep 3
@@ -452,9 +466,18 @@ sambungkan_whatsapp() {
       *) sleep 3 ;;
     esac
     detik=$(( $(date +%s) - t0 ))
+    if (( pernah_qr == 0 && detik > 120 )) && [[ "$status" == "FAILED" || "$status" == "STARTING" ]]; then
+      err "Sesi WhatsApp terus gagal dimulai selama 2 menit (QR belum pernah muncul)."
+      galat="$(galat_waha_terakhir)"
+      [[ -z "$galat" ]] || info "Galat terakhir WAHA: $galat"
+      info "Jalankan diagnosa (hanya membaca) lalu kirim hasilnya ke pembuat bot:"
+      info "  $DIAGNOSA_CMD"
+      return 1
+    fi
     if (( detik > 300 )); then
       err "5 menit berlalu tetapi WhatsApp belum tersambung."
       info "Ulangi hanya langkah ini:  $(cara_ulang --qr)"
+      info "Bila tetap gagal, jalankan diagnosa:  $DIAGNOSA_CMD"
       return 1
     fi
   done
