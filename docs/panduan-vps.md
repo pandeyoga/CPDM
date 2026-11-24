@@ -15,6 +15,38 @@ Dalam panduan ini, tanda `~` berarti folder rumah Anda di VPS, dan `deploy` adal
 
 ---
 
+## Cara cepat (disarankan)
+
+Cukup **satu perintah**. Masuk ke VPS baru (Ubuntu 22.04/24.04 atau Debian 12, RAM 2 GB) lewat SSH, lalu tempel:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/install.sh -o install.sh && sudo bash install.sh
+```
+
+Pemasang berbahasa Indonesia, menjalankan semuanya berurutan, dan **aman diulang**: kalau terputus atau gagal, jalankan lagi (`sudo bash /opt/cp-sistem/deploy/install.sh`) dan langkah yang sudah selesai dilewati.
+
+Yang akan ditanyakan (siapkan dulu):
+
+1. **API key Claude** baru dari console.anthropic.com > API Keys (berawalan `sk-ant-api...`, akun ada saldo). Diketik tersembunyi; jangan kirim lewat chat.
+2. **Scan QR WhatsApp**: kode QR muncul di terminal; di HP nomor bot buka WhatsApp > Perangkat tertaut > Tautkan perangkat.
+3. **Pilih grup "CP Live"** dari daftar bernomor (buat grupnya dulu, isi dengan nomor bot).
+4. **Kirim satu foto berketerangan `tes`** ke grup itu, untuk menguji penerimaan gambar.
+5. **Uji baca screenshot** dengan Claude (opsional, y/n).
+6. **Client ID dan Client secret Google** (OAuth "Desktop app"; langkah singkatnya ditampilkan pemasang), lalu buka tautan login, setujui, dan tempel alamat akhir browser (halamannya tampil error, itu wajar).
+7. **Email owner** (opsional; Enter = akun Google yang tadi login).
+
+Rahasia dibuat otomatis atau diketik tersembunyi, hanya disimpan di `/opt/cp-sistem/deploy/.env` (mode 600), dan tidak pernah dicetak.
+
+Selesai, pemasang menampilkan tautan spreadsheet dan sisa langkah manual: pasang `heartbeat.gs` (bagian 7), isi tab Pengaturan (bagian 8), dan tambahkan host ke grup.
+
+Opsi lain: `--qr` (scan ulang WhatsApp saja), `--dari-awal` (ulangi semua langkah, rahasia yang ada tetap dipakai), `--repo git@github.com:pandeyoga/cpdm.git` (bila repo sudah privat; pemasang mencetak cara membuat deploy key).
+
+Lanjut ke **Pemecahan masalah** di akhir bila ada yang gagal. Bagian bernomor di bawah adalah **Cara manual** (rujukan/untuk memahami tiap langkah).
+
+---
+
+## Cara manual (rujukan)
+
 ## 0. Yang harus disiapkan dulu
 
 - [ ] **VPS Linux** (Ubuntu 22.04/24.04 atau Debian 12), RAM 1–2 GB, akses SSH.
