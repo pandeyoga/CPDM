@@ -8,7 +8,8 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/cp-sistem}"
 DEPLOY="$INSTALL_DIR/deploy"
 judul() { printf '\n== %s ==\n' "$1"; }
 samar() { sed -E -e 's/\x1b\[[0-9;]*m//g' -e 's/([0-9]{4,11})([0-9]{4})/****\2/g'; }
-dc() { (cd "$DEPLOY" && docker compose "$@"); }
+# </dev/null: saat skrip dijalankan lewat "curl | bash", stdin adalah sisa skrip; docker exec akan menelannya.
+dc() { (cd "$DEPLOY" && docker compose "$@" </dev/null); }
 
 [[ -f "$DEPLOY/docker-compose.yml" ]] || { echo "Tidak menemukan $DEPLOY/docker-compose.yml (atur INSTALL_DIR bila folder lain)."; exit 1; }
 

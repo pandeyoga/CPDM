@@ -13,6 +13,9 @@ services:
     image: devlikeapro/waha:${WAHA_TAG:-latest}
     restart: unless-stopped
     environment:
+      # Mesin WhatsApp. GOWS (tanpa browser, ringan) dipakai sejak WhatsApp Web berubah pada 23-11-2026 dan membuat
+      # mesin WEBJS (whatsapp-web.js 1.34.7) tidak pernah memunculkan QR. Isi WAHA_ENGINE di .env untuk menggantinya.
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-GOWS}
       WAHA_API_KEY: ${WAHA_API_KEY:?isi WAHA_API_KEY di .env}
       # Webhook ke bot lewat jaringan internal Docker (bot TIDAK dibuka ke internet).
       WHATSAPP_HOOK_URL: http://bot:3000/webhook/waha
