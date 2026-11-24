@@ -72,6 +72,26 @@ FAKE='{"77@g.us":{"subject":"Peta"}}'
 cek "grup: objek berkunci id" $'77@g.us	Peta' "$(daftar_grup)"
 FAKE='bukan json'
 cek "grup: gagal parse -> kosong" "" "$(daftar_grup)"
+waha_get() { case "$1" in */groups) printf '[]' ;; */chats*) printf '%s' '[{"id":"88@g.us","name":"Dari Chat"},{"id":"1@c.us","name":"x"}]' ;; esac; }
+cek "grup: cadangan lewat daftar chat" $'88@g.us	Dari Chat' "$(daftar_grup)"
+
+# --- get_env: CR dan tanda kutip pembungkus dibuang ---
+printf 'Q1="nilai kutip"\nQ2='"'"'satu'"'"'\nQ3=ada-cr\r\nQ4="setengah\n' > "$F"
+cek "get_env: kutip ganda" "nilai kutip" "$(get_env Q1 "$F")"
+cek "get_env: kutip tunggal" "satu" "$(get_env Q2 "$F")"
+cek "get_env: CR dibuang" "ada-cr" "$(get_env Q3 "$F")"
+cek "get_env: kutip tak berpasangan dibiarkan" '"setengah' "$(get_env Q4 "$F")"
+
+# --- cara_ulang: sebelum klon menunjuk install.sh di folder kerja ---
+INSTALL_DIR="$T/belum-ada"
+cek "cara_ulang: sebelum klon" "sudo INSTALL_DIR=$T/belum-ada bash install.sh" "$(cara_ulang)"
+mkdir -p "$T/sudah/deploy" && : > "$T/sudah/deploy/install.sh"
+INSTALL_DIR="$T/sudah"
+cek "cara_ulang: sesudah klon + opsi" "sudo INSTALL_DIR=$T/sudah bash $T/sudah/deploy/install.sh --qr" "$(cara_ulang --qr)"
+if [[ ! -e /opt/cp-sistem ]]; then
+  INSTALL_DIR=/opt/cp-sistem
+  cek "cara_ulang: folder bawaan tanpa awalan" "sudo bash install.sh" "$(cara_ulang)"
+fi
 
 if (( GAGAL > 0 )); then printf '\n%d uji GAGAL\n' "$GAGAL"; exit 1; fi
 printf '\nSemua uji lulus\n'

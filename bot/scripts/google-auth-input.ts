@@ -8,6 +8,21 @@ export function parseAuthInput(masukan: string, stateDiharapkan: string): HasilM
   const t = masukan.trim().replace(/^["'<]+|["'>]+$/g, "");
   if (t === "") return { ok: false, reason: "Tidak ada yang ditempel." };
 
+  // Potongan query tanpa "?" (mis. "code=4/0A…&scope=…"): kode Google sendiri tidak memuat "=".
+  const potongan = !/^https?:\/\//i.test(t) && !t.includes("?") && /^(code|state|error|scope)=/i.test(t);
+  if (potongan) {
+    const params = new URLSearchParams(t);
+    const galat = params.get("error");
+    if (galat) return { ok: false, reason: `Google menolak akses (${galat}). Ulangi dan klik Izinkan.` };
+    const state = params.get("state");
+    if (state !== null && state !== stateDiharapkan) {
+      return { ok: false, reason: "Kode 'state' tidak cocok. Tempel alamat dari tautan yang BARU dicetak, bukan dari percobaan lama." };
+    }
+    const code = params.get("code");
+    if (!code) return { ok: false, reason: "Yang ditempel tidak memuat 'code'. Tempel alamat lengkap dari browser." };
+    return { ok: true, code };
+  }
+
   if (/^https?:\/\//i.test(t) || t.includes("?")) {
     let params: URLSearchParams;
     try {

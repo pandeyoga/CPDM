@@ -50,7 +50,12 @@ is_placeholder() {
 get_env() {
   local key="$1" file="${2:-$ENV_FILE}" line=""
   [[ -f "$file" ]] && line=$(grep -m1 "^${key}=" "$file" || true)
-  printf '%s' "${line#*=}"
+  line="${line#*=}"
+  line="${line%$'\r'}"
+  if [[ ${#line} -ge 2 && ( ( "${line:0:1}" == '"' && "${line: -1}" == '"' ) || ( "${line:0:1}" == "'" && "${line: -1}" == "'" ) ) ]]; then
+    line="${line:1:${#line}-2}"
+  fi
+  printf '%s' "$line"
 }
 
 # Tulis KEY=VALUE: ganti baris yang ada, atau tambahkan. Aman untuk karakter / & | \ ' " $ dan spasi
@@ -129,11 +134,35 @@ confirm() { # confirm "pertanyaan" -> 0 bila y
 step_done() { [[ "$DARI_AWAL" -eq 0 && -f "$STATE_DIR/$1" ]]; }
 mark_done() { mkdir -p "$STATE_DIR"; date -u +%FT%TZ > "$STATE_DIR/$1"; }
 
+# Perintah untuk melanjutkan; sebelum langkah 2 skrip baru ada di folder tempat pemilik menjalankannya.
+cara_ulang() {
+  local awal=""
+  [[ "$INSTALL_DIR" == "/opt/cp-sistem" ]] || awal="INSTALL_DIR=$INSTALL_DIR "
+  if [[ -f "$INSTALL_DIR/deploy/install.sh" ]]; then
+    printf 'sudo %sbash %s/deploy/install.sh%s' "$awal" "$INSTALL_DIR" "${1:+ $1}"
+  else
+    printf 'sudo %sbash install.sh%s' "$awal" "${1:+ $1}"
+  fi
+}
+
 on_error() {
   local line="$1"
-  err "Terhenti di baris $line. Baca pesan di atas."
+  err "Pemasangan berhenti (baris $line). Baca pesan di atas."
   info "Langkah yang sudah selesai tidak diulang. Setelah masalah diperbaiki, jalankan lagi:"
-  info "  sudo bash $INSTALL_DIR/deploy/install.sh"
+  info "  $(cara_ulang)"
+}
+
+# apt-get yang sabar: VPS baru sering menjalankan pembaruan otomatis yang mengunci apt beberapa menit.
+apt_coba() {
+  local n
+  for n in 1 2 3 4 5 6; do
+    apt-get -o DPkg::Lock::Timeout=120 "$@" && return 0
+    if (( n < 6 )); then
+      warn "apt sedang dipakai proses lain (biasa pada VPS baru). Menunggu 30 detik lalu mencoba lagi ($n/5)..."
+      sleep 30
+    fi
+  done
+  return 1
 }
 
 # ---------- 0. pemeriksaan awal ----------
@@ -183,15 +212,23 @@ install_packages() {
   if (( ${#perlu[@]} > 0 )); then
     info "Memasang: ${perlu[*]} (beberapa menit)"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq || die "apt-get update gagal. Periksa koneksi internet VPS lalu jalankan ulang."
-    apt-get install -y -qq "${perlu[@]}" || die "Gagal memasang paket: ${perlu[*]}. Jalankan ulang; bila tetap gagal kirim pesan galat di atas ke pembuat bot."
+    apt_coba update -qq || die "apt-get update gagal. Periksa koneksi internet VPS lalu jalankan ulang."
+    apt_coba install -y -qq "${perlu[@]}" || die "Gagal memasang paket: ${perlu[*]}. Jalankan ulang; bila tetap gagal kirim pesan galat di atas ke pembuat bot."
   fi
   ok "Paket dasar siap"
   if docker compose version >/dev/null 2>&1; then
     ok "Docker sudah terpasang"
   else
     info "Memasang Docker (skrip resmi get.docker.com, beberapa menit)"
-    curl -fsSL https://get.docker.com | sh || die "Pemasangan Docker gagal. Jalankan ulang skrip ini; bila tetap gagal kirim pesan galat di atas."
+    local n ok_docker=0
+    for n in 1 2 3; do
+      if curl -fsSL https://get.docker.com | sh; then ok_docker=1; break; fi
+      if (( n < 3 )); then
+        warn "Pemasangan Docker gagal (bisa karena pembaruan otomatis VPS sedang jalan). Mencoba lagi dalam 60 detik ($n/2)..."
+        sleep 60
+      fi
+    done
+    (( ok_docker == 1 )) || die "Pemasangan Docker gagal. Jalankan ulang skrip ini; bila tetap gagal kirim pesan galat di atas."
     systemctl enable --now docker >/dev/null 2>&1 || true
     docker compose version >/dev/null 2>&1 || die "Docker terpasang tetapi 'docker compose' tidak ada. Pasang paket docker-compose-plugin lalu jalankan ulang."
     ok "Docker terpasang"
@@ -293,14 +330,22 @@ waha_status() {
 }
 
 tunggu_api_waha() {
-  local i code
+  local i code dibuat_ulang=0
   info "Menunggu WAHA siap (maksimal 2 menit)..."
   for ((i = 0; i < 40; i++)); do
     code=$(waha_curl -o /dev/null -w '%{http_code}' "$WAHA_BASE/api/sessions/$SESI" 2>/dev/null || true)
     case "$code" in
       200) return 0 ;;
       404) waha_post "/api/sessions/$SESI/start" 2>/dev/null || true ;;
-      401|403) die "WAHA menolak kunci API. Hapus baris WAHA_API_KEY di $ENV_FILE, jalankan ulang skrip, lalu 'docker compose down -v' bila perlu." ;;
+      401|403)
+        if (( dibuat_ulang == 0 )); then
+          warn "WAHA memakai kunci API lama; memuat ulang WAHA dengan kunci dari .env (sambungan WhatsApp tetap)..."
+          dc up -d --force-recreate waha >/dev/null || true
+          dibuat_ulang=1
+        else
+          die "WAHA tetap menolak kunci API di $ENV_FILE. Kirim pesan ini ke pembuat bot."
+        fi
+        ;;
     esac
     sleep 3
   done
@@ -318,7 +363,7 @@ tampilkan_qr() {
   info "Kode berganti tiap sekitar 20 detik; bila gagal, tunggu kode baru muncul. (Ctrl+C untuk batal)"
   echo
   if [[ -n "$qr" ]]; then
-    qrencode -t ANSIUTF8 -m 1 "$qr"
+    qrencode -t ANSIUTF8 -m 2 "$qr"
   else
     warn "QR belum tersedia, menunggu WAHA..."
   fi
@@ -326,7 +371,13 @@ tampilkan_qr() {
 
 sambungkan_whatsapp() {
   local paksa="${1:-0}" status="" i t0 detik
-  dc up -d waha >/dev/null 2>&1 || { err "Gagal menjalankan WAHA."; info "Lihat: docker compose -f $DEPLOY/docker-compose.yml logs --tail 50 waha"; return 1; }
+  info "Menjalankan WAHA (pertama kali mengunduh image sekitar 1 GB, bisa beberapa menit)..."
+  if ! dc up -d waha >/dev/null; then
+    err "Gagal menjalankan WAHA. Penyebabnya tertulis di atas."
+    info "Yang sering terjadi: port 3000 sudah dipakai program lain, disk VPS penuh (cek: df -h), atau batas unduh Docker Hub (tunggu 1 jam)."
+    info "Setelah diperbaiki, jalankan lagi:  $(cara_ulang)"
+    return 1
+  fi
   tunggu_api_waha
   status=$(waha_status)
   if [[ "$status" == "WORKING" && "$paksa" == "1" ]]; then
@@ -341,10 +392,10 @@ sambungkan_whatsapp() {
     status=$(waha_status)
     case "$status" in
       WORKING) break ;;
-      STOPPED|"") waha_post "/api/sessions/$SESI/start" 2>/dev/null || true ;;
+      STOPPED|"") waha_post "/api/sessions/$SESI/start" 2>/dev/null || true; sleep 3 ;;
       FAILED)
         warn "Sesi WhatsApp gagal; memulai ulang WAHA..."
-        dc restart waha >/dev/null 2>&1 || true
+        dc restart waha >/dev/null || true
         sleep 10
         ;;
       SCAN_QR_CODE)
@@ -359,7 +410,7 @@ sambungkan_whatsapp() {
     detik=$(( $(date +%s) - t0 ))
     if (( detik > 300 )); then
       err "5 menit berlalu tetapi WhatsApp belum tersambung."
-      info "Ulangi hanya langkah ini:  sudo bash $INSTALL_DIR/deploy/install.sh --qr"
+      info "Ulangi hanya langkah ini:  $(cara_ulang --qr)"
       return 1
     fi
   done
@@ -381,8 +432,15 @@ langkah_whatsapp() {
 }
 
 # ---------- 5. grup ----------
-daftar_grup() { # stdout: "id<TAB>nama" per baris
-  waha_get "/api/$SESI/groups" 2>/dev/null | jq -r '
+daftar_grup() { # stdout: "id<TAB>nama" per baris; cadangan lewat daftar chat bila /groups kosong
+  local hasil
+  hasil=$(waha_get "/api/$SESI/groups" 2>/dev/null | saring_grup)
+  [[ -n "$hasil" ]] || hasil=$(waha_get "/api/$SESI/chats?limit=100" 2>/dev/null | saring_grup)
+  printf '%s' "$hasil"
+}
+
+saring_grup() { # JSON (stdin) -> "id<TAB>nama" untuk id berakhiran @g.us
+  jq -r '
     (if type == "array" then .
      elif type == "object" then (to_entries | map(select(.value | type == "object") | .value + {jid: .key}))
      else [] end)
@@ -423,7 +481,8 @@ langkah_grup() {
     if [[ "$line" =~ ^[0-9]+$ ]] && (( line >= 1 && line <= ${#ids[@]} )); then
       gid="${ids[$((line - 1))]}"
     elif [[ "$line" =~ ^[Mm]$ ]]; then
-      info "Kirim pesan apa saja di grup, lalu cari ID-nya:  docker compose -f $DEPLOY/docker-compose.yml logs waha | grep -o '[0-9]*@g.us' | sort -u"
+      info "ID grup berbentuk angka panjang diakhiri @g.us (contoh 120363012345678901@g.us)."
+      info "Bila grup tidak muncul di daftar: kirim satu pesan di grup itu, tunggu 30 detik, lalu pilih r (muat ulang)."
       ask "ID grup (berakhiran @g.us)" ""
       if [[ "$ASK_ANSWER" == *@g.us ]]; then gid="$ASK_ANSWER"; else warn "ID harus berakhiran @g.us."; fi
     elif [[ ! "$line" =~ ^[Rr]$ && -n "$line" ]]; then
@@ -442,6 +501,21 @@ langkah_task0() {
   local gid mulai batas pesan="" i url mime path ukuran out
   gid="$(get_env LIVE_GROUP_ID)"
   mulai=$(( $(date +%s) - 30 ))
+  local kode_http
+  kode_http=$(waha_curl -o /dev/null -w '%{http_code}' "$WAHA_BASE/api/$SESI/chats/$gid/messages?limit=1" 2>/dev/null || true)
+  if [[ "$kode_http" != "200" ]]; then
+    err "WAHA tidak bisa membaca pesan grup yang dipilih (kode HTTP ${kode_http:-tidak ada jawaban})."
+    case "$kode_http" in
+      400|404|422)
+        info "ID grup tampaknya salah. Grup akan ditanyakan lagi saat skrip dijalankan ulang."
+        rm -f "$STATE_DIR/grup"
+        set_env LIVE_GROUP_ID "GANTI_dengan_id_grup"
+        ;;
+      *) info "WhatsApp mungkin terputus atau WAHA belum siap. Tunggu 1 menit." ;;
+    esac
+    info "Jalankan lagi:  $(cara_ulang)"
+    return 1
+  fi
   info "Sekarang kirim SATU foto apa saja ke grup tadi dengan keterangan (caption):  tes"
   info "Menunggu foto masuk (maksimal 3 menit)..."
   batas=$(( $(date +%s) + 180 ))
@@ -456,7 +530,7 @@ langkah_task0() {
   if [[ -z "$pesan" ]]; then
     err "Tidak ada foto baru dari grup dalam 3 menit."
     info "Cek: (1) nomor bot ada di grup dan grup yang dipilih benar, (2) foto dikirim SETELAH tulisan di atas muncul."
-    info "Lalu ulangi:  sudo bash $INSTALL_DIR/deploy/install.sh"
+    info "Lalu ulangi:  $(cara_ulang)"
     return 1
   fi
   ok "Pesan bergambar terdeteksi"
@@ -472,7 +546,7 @@ langkah_task0() {
     info "Kirim berkas ini ke pembuat bot (tidak berisi rahasia): $DEPLOY/task0/pesan-gambar.json"
     return 1
   fi
-  path="/${url#*://*/}"
+  if [[ "$url" == *://* ]]; then path="/${url#*://*/}"; else path="/${url#/}"; fi
   out=$(mktemp)
   if ! waha_curl -f -o "$out" "$WAHA_BASE$path"; then
     rm -f "$out"
@@ -503,7 +577,7 @@ langkah_smoke() {
   fi
   info "Membangun image bot (pertama kali sekitar 3-6 menit)..."
   dc build bot || { err "Build bot gagal. Lihat pesan di atas; jalankan ulang skrip setelah diperbaiki."; return 1; }
-  if dc run --rm --no-deps -T bot node dist/scripts/smoke-extract.js; then
+  if dc run --rm --no-deps -T bot node dist/scripts/smoke-extract.js </dev/null; then
     ok "Uji baca selesai (hasil di atas; LULUS berarti pembacaan cocok dengan acuan)"
   else
     warn "Uji baca melaporkan masalah (lihat di atas). Bot tetap bisa dipasang; kirim hasil di atas ke pembuat bot."
@@ -543,13 +617,17 @@ langkah_google() {
   fi
   dc build --quiet bot >/dev/null || { err "Build bot gagal. Lihat pesan di atas."; return 1; }
   info "Sekarang Anda akan diberi sebuah tautan. Buka di browser, setujui akses, lalu tempel kembali alamat akhirnya."
-  local out token
+  local out token berhasil=0
   out=$(mktemp)
   chmod 600 "$out"
-  if ! dc run --rm --no-deps -T bot node dist/scripts/google-auth.js --manual </dev/tty >"$out"; then
-    rm -f "$out"
+  while true; do
+    if dc run --rm --no-deps -T bot node dist/scripts/google-auth.js --manual </dev/tty >"$out"; then berhasil=1; break; fi
     err "Login Google gagal. Pastikan Anda menempel ALAMAT LENGKAP dari browser, dan akun Anda terdaftar sebagai Test user."
-    info "Ulangi:  sudo bash $INSTALL_DIR/deploy/install.sh"
+    confirm "Coba lagi sekarang? (akan muncul tautan BARU)" || break
+  done
+  if (( berhasil == 0 )); then
+    rm -f "$out"
+    info "Ulangi nanti:  $(cara_ulang)"
     return 1
   fi
   token=$(tr -d '\r' < "$out" | grep -m1 '^GOOGLE_REFRESH_TOKEN=' | cut -d= -f2- || true)
@@ -575,7 +653,7 @@ langkah_sheet() {
   out=$(mktemp)
   chmod 600 "$out"
   info "Membuat spreadsheet 'CP – Live Tracker' dan folder 'Bukti Live' (sekitar 1 menit)..."
-  if ! dc run --rm --no-deps -T bot node dist/scripts/setup-sheet.js >"$out"; then
+  if ! dc run --rm --no-deps -T bot node dist/scripts/setup-sheet.js </dev/null >"$out"; then
     rm -f "$out"
     err "Pembuatan spreadsheet gagal (lihat pesan di atas)."
     info "Penyebab umum: Google Sheets API / Drive API belum diaktifkan, atau token kedaluwarsa."
@@ -632,12 +710,14 @@ ringkasan() {
   info "4) Tambahkan para host ke grup WhatsApp \"CP Live\"."
   echo
   printf '%sPerintah berguna:%s\n' "$C_B" "$C_OFF"
-  info "Lanjutkan/ulangi pemasangan : sudo bash $INSTALL_DIR/deploy/install.sh"
-  info "Sambung ulang WhatsApp      : sudo bash $INSTALL_DIR/deploy/install.sh --qr"
+  info "Lanjutkan/ulangi pemasangan : $(cara_ulang)"
+  info "Sambung ulang WhatsApp      : $(cara_ulang --qr)"
   info "Lihat log bot               : docker compose -f $INSTALL_DIR/deploy/docker-compose.yml logs -f bot"
   info "Status layanan              : docker compose -f $INSTALL_DIR/deploy/docker-compose.yml ps"
   echo
   info "Rahasia ada di $ENV_FILE (jangan dikirim ke siapa pun)."
+  info "Dashboard WAHA (opsional) tidak terbuka ke internet. Dari laptop:  ssh -L 3000:127.0.0.1:3000 <user>@<ip-vps>"
+  info "  lalu buka http://localhost:3000/dashboard (user admin, sandi = WAHA_DASHBOARD_PASSWORD di berkas yang sama)."
 }
 
 main() {
