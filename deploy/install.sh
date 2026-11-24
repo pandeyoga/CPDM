@@ -7,6 +7,7 @@
 # Aman dijalankan ulang: langkah yang sudah selesai dilewati.
 # Opsi:  --dari-awal   ulangi semua langkah (rahasia di .env yang sudah ada tetap dipakai)
 #        --qr          sambungkan ulang WhatsApp (scan QR lagi), tanpa langkah lain
+#        --sheet       hanya login Google + buat spreadsheet & folder bukti (tanpa WhatsApp), mis. untuk ditunjukkan dulu
 #        --repo URL    alamat repo (mis. git@github.com:pandeyoga/cpdm.git untuk repo privat)
 # Variabel: INSTALL_DIR (bawaan /opt/cp-sistem), REPO_URL (bawaan https://github.com/pandeyoga/cpdm)
 # Rahasia tidak pernah dicetak ke layar maupun di-commit.
@@ -19,6 +20,7 @@ WAHA_BASE="http://127.0.0.1:3000"
 SESI="default"
 DARI_AWAL=0
 HANYA_QR=0
+HANYA_SHEET=0
 
 DEPLOY=""
 ENV_FILE=""
@@ -802,10 +804,11 @@ main() {
     case "$1" in
       --dari-awal) DARI_AWAL=1 ;;
       --qr) HANYA_QR=1 ;;
+      --sheet) HANYA_SHEET=1 ;;
       --repo) shift; REPO_URL="${1:?--repo butuh alamat repo}" ;;
       --repo=*) REPO_URL="${1#--repo=}" ;;
       -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
-      *) die "Opsi tidak dikenal: $1 (yang ada: --dari-awal, --qr, --repo URL)" ;;
+      *) die "Opsi tidak dikenal: $1 (yang ada: --dari-awal, --qr, --sheet, --repo URL)" ;;
     esac
     shift
   done
@@ -815,6 +818,15 @@ main() {
   ambil_kode
   if (( DARI_AWAL == 1 )); then rm -rf "$STATE_DIR"; warn "Mengulang semua langkah (rahasia yang sudah ada tetap dipakai)."; fi
   siapkan_env
+  if (( HANYA_SHEET == 1 )); then
+    langkah_google
+    langkah_sheet
+    judul "Spreadsheet siap"
+    info "Buka: https://docs.google.com/spreadsheets/d/$(get_env LIVE_SPREADSHEET_ID)"
+    info "Bot belum berjalan (WhatsApp belum disambungkan), jadi tab masih kosong; strukturnya sudah final."
+    info "Lanjutkan pemasangan (scan WhatsApp, dst.) kapan saja:  $(cara_ulang)"
+    exit 0
+  fi
   if (( HANYA_QR == 1 )); then
     judul "Sambung ulang WhatsApp"
     sambungkan_whatsapp 1
