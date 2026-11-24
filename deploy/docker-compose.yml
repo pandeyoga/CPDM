@@ -2,6 +2,10 @@
 # Dijalankan dari folder ini:  cd deploy && docker compose up -d
 # Semua ${VARIABEL} dibaca otomatis dari berkas .env di folder ini (salin dari .env.example).
 
+# Nama proyek tetap, supaya container/volume/jaringan tidak bertabrakan dengan proyek lain di VPS yang sama
+# (tanpa ini Docker memakai nama folder "deploy", yang sering dipakai proyek lain).
+name: cp-sistem
+
 services:
   waha:
     # Setelah Task 0 (uji WAHA) selesai, KUNCI versinya: isi WAHA_TAG di .env dengan tag yang diuji
@@ -32,7 +36,8 @@ services:
       WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?isi WAHA_DASHBOARD_PASSWORD di .env}
     ports:
       # HANYA 127.0.0.1: dashboard tidak terbuka ke internet. Dari komputer Anda, buka lewat SSH tunnel.
-      - "127.0.0.1:3000:3000"
+      # WAHA_PORT dipilih otomatis oleh pemasang (3000, atau port bebas lain bila 3000 dipakai proyek lain).
+      - "127.0.0.1:${WAHA_PORT:-3000}:3000"
     volumes:
       - waha_sessions:/app/.sessions   # sesi WhatsApp (tanpa ini QR harus di-scan ulang setiap container dibuat ulang)
       - waha_media:/app/.media         # berkas media sementara

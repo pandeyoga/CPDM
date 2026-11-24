@@ -182,11 +182,20 @@ preflight() {
   fi
   ok "Sistem: ${id_like%% *} (didukung)"
   local mem_kb disk_kb
+  local avail_kb
   mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+  avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
   if (( mem_kb < 1400000 )); then
     warn "RAM sekitar $((mem_kb / 1024)) MB, kurang dari 1,5 GB. Bisa berjalan, tetapi proses build bisa gagal. Disarankan VPS 2 GB."
+  elif (( ${avail_kb:-0} < 1200000 )); then
+    warn "RAM tersedia hanya $((avail_kb / 1024)) MB (sisanya dipakai program lain). WAHA + bot butuh sekitar 1 GB; proyek lain bisa melambat."
   else
-    ok "RAM cukup ($((mem_kb / 1024)) MB)"
+    ok "RAM cukup ($((avail_kb / 1024)) MB tersedia dari $((mem_kb / 1024)) MB)"
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    local lain
+    lain=$(docker ps -q 2>/dev/null | wc -l)
+    (( lain == 0 )) || info "Ada $lain container lain yang berjalan. Pemasang ini tidak menghentikan, memperbarui, atau menghapusnya."
   fi
   local cek_dir="$INSTALL_DIR"
   while [[ ! -d "$cek_dir" ]]; do cek_dir="$(dirname "$cek_dir")"; done
@@ -218,6 +227,12 @@ install_packages() {
   ok "Paket dasar siap"
   if docker compose version >/dev/null 2>&1; then
     ok "Docker sudah terpasang"
+  elif command -v docker >/dev/null 2>&1; then
+    # Docker sudah dipakai proyek lain: JANGAN pasang ulang (bisa me-restart semua container). Cukup tambah plugin compose.
+    info "Docker sudah ada tetapi 'docker compose' belum; memasang plugin compose saja (Docker tidak dipasang ulang)."
+    apt_coba install -y -qq docker-compose-plugin >/dev/null 2>&1 || apt_coba install -y -qq docker-compose-v2 >/dev/null 2>&1 || true
+    docker compose version >/dev/null 2>&1 || die "Tidak bisa memasang 'docker compose' v2 otomatis. Docker di VPS ini dipasang dengan cara lain; minta pengelola VPS memasang docker-compose-plugin, lalu jalankan ulang. Docker yang ada tidak diubah."
+    ok "Plugin docker compose terpasang"
   else
     info "Memasang Docker (skrip resmi get.docker.com, beberapa menit)"
     local n ok_docker=0
@@ -279,6 +294,32 @@ ambil_kode() {
 
 dc() { (cd "$DEPLOY" && docker compose "$@"); }
 
+# Apakah ada program yang mendengarkan di port TCP ini (alamat mana pun)? Tanpa ketergantungan pada ss/netstat.
+port_dipakai() {
+  local hex f berkas=()
+  hex=$(printf '%04X' "$1")
+  # tcp6 tidak ada bila IPv6 dimatikan; hanya baca berkas yang ada.
+  for f in "${PROC_NET_TCP:-/proc/net/tcp}" "${PROC_NET_TCP6:-/proc/net/tcp6}"; do [[ -r "$f" ]] && berkas+=("$f"); done
+  (( ${#berkas[@]} > 0 )) || return 1
+  awk -v h="$hex" '$4 == "0A" { n = split($2, a, ":"); if (a[n] == h) f = 1 } END { exit !f }' "${berkas[@]}"
+}
+
+# Port WAHA di 127.0.0.1: 3000, atau port bebas pertama di 3100-3199 bila 3000 dipakai proyek lain. Dipilih sekali, disimpan di .env.
+pilih_port_waha() {
+  local port p
+  port="$(get_env WAHA_PORT)"
+  if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+    port=""
+    for p in 3000 $(seq 3100 3199); do
+      if ! port_dipakai "$p"; then port="$p"; break; fi
+    done
+    [[ -n "$port" ]] || die "Tidak ada port bebas di 3000 atau 3100-3199 untuk WAHA. Bebaskan salah satu lalu jalankan ulang."
+    set_env WAHA_PORT "$port"
+    if [[ "$port" == "3000" ]]; then ok "Port WAHA: 3000 (hanya 127.0.0.1)"; else ok "Port 3000 dipakai program lain; WAHA memakai port $port (hanya 127.0.0.1)"; fi
+  fi
+  WAHA_BASE="http://127.0.0.1:$port"
+}
+
 # ---------- 3. .env ----------
 siapkan_env() {
   judul "3/11 Menyiapkan konfigurasi (.env)"
@@ -295,6 +336,8 @@ siapkan_env() {
   if is_placeholder "$(get_env WAHA_DASHBOARD_PASSWORD)"; then
     set_env WAHA_DASHBOARD_PASSWORD "$(openssl rand -hex 16)"; ok "WAHA_DASHBOARD_PASSWORD dibuat otomatis"
   fi
+
+  pilih_port_waha
 
   if is_placeholder "$(get_env ANTHROPIC_API_KEY)"; then
     warn "Perlu API key Claude. Buat key BARU di console.anthropic.com > API Keys (berawalan sk-ant-api...)."
@@ -374,7 +417,8 @@ sambungkan_whatsapp() {
   info "Menjalankan WAHA (pertama kali mengunduh image sekitar 1 GB, bisa beberapa menit)..."
   if ! dc up -d waha >/dev/null; then
     err "Gagal menjalankan WAHA. Penyebabnya tertulis di atas."
-    info "Yang sering terjadi: port 3000 sudah dipakai program lain, disk VPS penuh (cek: df -h), atau batas unduh Docker Hub (tunggu 1 jam)."
+    info "Yang sering terjadi: port $(get_env WAHA_PORT) sudah dipakai program lain (hapus baris WAHA_PORT di $ENV_FILE agar dipilih ulang),"
+    info "disk VPS penuh (cek: df -h), atau batas unduh Docker Hub (tunggu 1 jam)."
     info "Setelah diperbaiki, jalankan lagi:  $(cara_ulang)"
     return 1
   fi
@@ -716,7 +760,7 @@ ringkasan() {
   info "Status layanan              : docker compose -f $INSTALL_DIR/deploy/docker-compose.yml ps"
   echo
   info "Rahasia ada di $ENV_FILE (jangan dikirim ke siapa pun)."
-  info "Dashboard WAHA (opsional) tidak terbuka ke internet. Dari laptop:  ssh -L 3000:127.0.0.1:3000 <user>@<ip-vps>"
+  info "Dashboard WAHA (opsional) tidak terbuka ke internet. Dari laptop:  ssh -L 3000:127.0.0.1:$(get_env WAHA_PORT) <user>@<ip-vps>"
   info "  lalu buka http://localhost:3000/dashboard (user admin, sandi = WAHA_DASHBOARD_PASSWORD di berkas yang sama)."
 }
 

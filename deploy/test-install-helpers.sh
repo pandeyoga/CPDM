@@ -93,5 +93,29 @@ if [[ ! -e /opt/cp-sistem ]]; then
   cek "cara_ulang: folder bawaan tanpa awalan" "sudo bash install.sh" "$(cara_ulang)"
 fi
 
+# --- port_dipakai / pilih_port_waha (berkas /proc palsu) ---
+PROC_NET_TCP="$T/tcp"; PROC_NET_TCP6="$T/tcp6"
+hdr='  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
+printf '%s\n   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1\n   1: 00000000:0C1C 00000000:0000 0A 0 0 0 0 0 0 0 0\n   2: 0100007F:0C1D 0100007F:9C40 01 0 0 0 0 0 0 0 0\n' "$hdr" > "$PROC_NET_TCP"
+printf '%s\n   0: 00000000000000000000000000000000:1F90 00000000000000000000000000000000:0000 0A 0 0 0 0 0 0 0 0\n' "$hdr" > "$PROC_NET_TCP6"
+port_dipakai 3000; cek "port: 3000 dipakai (127.0.0.1)" 0 $?
+port_dipakai 3100; cek "port: 3100 dipakai (0.0.0.0)" 0 $?
+port_dipakai 3101; cek "port: 3101 hanya koneksi keluar -> bebas" 1 $?
+port_dipakai 8080; cek "port: 8080 dipakai (IPv6)" 0 $?
+port_dipakai 3102; cek "port: 3102 bebas" 1 $?
+PROC_NET_TCP6="$T/tidak-ada"
+port_dipakai 3000; cek "port: tanpa tcp6 (IPv6 mati) tetap terdeteksi" 0 $?
+PROC_NET_TCP6="$T/tcp6"
+ENV_FILE="$T/port.env"; : > "$ENV_FILE"
+pilih_port_waha >/dev/null
+cek "pilih port: lewati yang dipakai" "3101" "$(get_env WAHA_PORT)"
+cek "pilih port: WAHA_BASE ikut" "http://127.0.0.1:3101" "$WAHA_BASE"
+set_env WAHA_PORT 3000 "$ENV_FILE"
+pilih_port_waha >/dev/null
+cek "pilih port: nilai tersimpan dipakai lagi (tidak dipilih ulang)" "http://127.0.0.1:3000" "$WAHA_BASE"
+printf '%s\n' "$hdr" > "$PROC_NET_TCP"; : > "$PROC_NET_TCP6"; : > "$ENV_FILE"
+pilih_port_waha >/dev/null
+cek "pilih port: 3000 bila bebas" "3000" "$(get_env WAHA_PORT)"
+
 if (( GAGAL > 0 )); then printf '\n%d uji GAGAL\n' "$GAGAL"; exit 1; fi
 printf '\nSemua uji lulus\n'

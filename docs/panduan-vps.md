@@ -17,7 +17,22 @@ Dalam panduan ini, tanda `~` berarti folder rumah Anda di VPS, dan `deploy` adal
 
 ## Cara cepat (disarankan)
 
-Cukup **satu perintah**. Masuk ke VPS baru (Ubuntu 22.04/24.04 atau Debian 12, RAM 2 GB) lewat SSH, lalu tempel:
+Cukup **satu perintah**. Masuk ke VPS (Ubuntu 22.04/24.04 atau Debian 12, RAM 2 GB) lewat SSH.
+
+**VPS yang sudah berisi proyek lain?** Jalankan dulu pemeriksaan ini. Skrip ini hanya membaca, tidak mengubah apa pun, dan tidak menampilkan sandi:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/cek-vps.sh | sudo bash
+```
+
+Skrip melaporkan RAM dan disk yang tersisa, container dan proyek compose yang ada, port yang terpakai, dan cara Docker dipasang. Pemasang aman untuk VPS bersama:
+
+- proyek Docker-nya bernama `cp-sistem`;
+- port WAHA hanya di `127.0.0.1`, dan bila 3000 terpakai, otomatis pindah ke port bebas di 3100-3199;
+- Docker yang sudah ada tidak dipasang ulang;
+- container dan proyek lain tidak dihentikan, diperbarui, atau dihapus.
+
+Lalu tempel:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/install.sh -o install.sh && sudo bash install.sh
@@ -188,7 +203,7 @@ docker compose ps
 Dashboard hanya mendengarkan di `127.0.0.1` VPS, jadi dibuka lewat "terowongan" dari **komputer Anda** (bukan dari VPS). Di terminal komputer Anda (Mac/Linux/Windows PowerShell), ganti `USER` dan `IP_VPS`:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 USER@IP_VPS
+ssh -L 3000:127.0.0.1:3000 USER@IP_VPS   # bila WAHA_PORT di .env bukan 3000, ganti angka kedua: 3000:127.0.0.1:3100
 ```
 
 Biarkan jendela itu terbuka. Di browser komputer Anda buka:
