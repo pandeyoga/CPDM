@@ -649,3 +649,11 @@ describe("Pengaturan: nomor WA berformat teks (Sheets membuang 0 di depan angka:
     expect(teks.every((f) => f.type === "TEXT")).toBe(true);
   });
 });
+
+describe("Pengaturan: label tanggal host jelas sekali isi & opsional (bukan isian harian)", () => {
+  it("I1/J1 menyebut mulai kerja / berhenti dan opsional", () => {
+    const v = tab("Pengaturan").values!;
+    expect(v.I1).toBe("Mulai kerja (opsional)");
+    expect(v.J1).toBe("Berhenti (opsional)");
+  });
+});

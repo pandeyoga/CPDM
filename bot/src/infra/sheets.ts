@@ -27,7 +27,8 @@ export const PENGATURAN_KEYS = {
 export const PENGATURAN_KEY_ORDER = Object.values(PENGATURAN_KEYS);
 /** Tabel target bulanan D:E, tabel host G:J (maks 10 baris, DAFTAR_HOST = Pengaturan!G2:G11), Pola Sesi L:N (belum dipakai). */
 export const PENGATURAN_TARGET_HEADERS = ["Bulan", "Target"] as const;
-export const PENGATURAN_HOST_HEADERS = ["Nama", "No WA", "Aktif mulai", "Aktif selesai"] as const;
+/** Tanggal mulai/berhenti diisi SEKALI per host (kosong = aktif terus); izin harian lewat #izin di grup. */
+export const PENGATURAN_HOST_HEADERS = ["Nama", "No WA", "Mulai kerja (opsional)", "Berhenti (opsional)"] as const;
 export const DAFTAR_HOST_RANGE = "Pengaturan!G2:G11";
 /** Baris pertama dan terakhir DAFTAR_HOST; host di luar itu tidak tampil di Dashboard Host. */
 export const BARIS_HOST = { pertama: 2, terakhir: 11 } as const;
@@ -163,7 +164,7 @@ export function fromSettingsRows(rows: Cell[][]): Parsed<Settings> {
       if (waId) host.waId = waId;
       else bad(row, `No WA host ${nama} tidak valid`);
     }
-    for (const [idx, prop, label] of [[8, "aktifMulai", "Aktif mulai"], [9, "aktifSelesai", "Aktif selesai"]] as const) {
+    for (const [idx, prop, label] of [[8, "aktifMulai", "Mulai kerja"], [9, "aktifSelesai", "Berhenti"]] as const) {
       if (blank(r[idx])) continue;
       const d = toDate(r[idx]);
       if (d) host[prop] = d;
