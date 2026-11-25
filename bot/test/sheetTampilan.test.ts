@@ -85,6 +85,11 @@ describe("tampilanRequests", () => {
         x.updateDimensionProperties.range.dimension === "ROWS" && x.updateDimensionProperties.range.startIndex === 1)!;
       expect(baris2.updateDimensionProperties!.properties!.pixelSize, t).toBeGreaterThanOrEqual(40);
     }
+    // Analisis Live: kolom H juga kolom jam 06 di peta jam (sempit); harus cukup lebar untuk 2 baris "Bulan lalu / tanggal sama".
+    const lebarH = r.filter((x) => x.updateDimensionProperties?.range?.sheetId === id("Analisis Live") &&
+      x.updateDimensionProperties.range.dimension === "COLUMNS" && x.updateDimensionProperties.range.startIndex! <= 7 &&
+      x.updateDimensionProperties.range.endIndex! > 7).at(-1)!;
+    expect(lebarH.updateDimensionProperties!.properties!.pixelSize).toBeGreaterThanOrEqual(130);
   });
 
   it("Analisis Live: peta jam bergradasi putih → biru", () => {

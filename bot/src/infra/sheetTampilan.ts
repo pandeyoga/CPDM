@@ -210,6 +210,8 @@ function analisisLive(id: number): Request[] {
     gaya(id, "A38:A44", { teks: WARNA.abu }),
     lebar(id, "A", "A", 170), lebar(id, "B", "C", 110), lebar(id, "D", "D", 165), lebar(id, "E", "G", 105),
     lebar(id, "H", "Y", 62),
+    // H2 (dropdown Bandingkan) ada di kolom H = kolom jam 06 peta jam; jam 06 hampir selalu kosong, jadi aman dilebarkan.
+    lebar(id, "H", "H", 130),
   ];
 }
 
