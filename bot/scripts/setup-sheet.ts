@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import type { drive_v3, sheets_v4 } from "googleapis";
 import { klienGoogle, PENGATURAN_KEYS, PENGATURAN_KEY_ORDER, TAB } from "../src/infra/sheets.js";
+import { tampilanRequests } from "../src/infra/sheetTampilan.js";
 import {
   formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint, spreadsheetPropsRequest,
   tabCellsTerpisah, tabRequests, validationRequests, valueRanges, LOCALE_RUMUS, ZONA_WAKTU, type CellValue, type TabBlueprint,
@@ -53,9 +54,13 @@ export async function setupSheet(
     if (!id) throw new Error("Sheets tidak mengembalikan spreadsheetId");
   }
 
+  // Locale en_US dalam panggilan TERSENDIRI: rumus validasi, warna bersyarat, dan sel dibaca dengan locale yang
+  // berlaku saat panggilan dimulai (diuji di Sheets asli: ganti locale di batch yang sama → rumus #ERROR!).
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: [spreadsheetPropsRequest(LOCALE_RUMUS)] } });
+
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: id,
-    fields: "sheets(properties(sheetId,title,gridProperties(rowCount)),protectedRanges(protectedRangeId,description)),namedRanges(name,namedRangeId)",
+    fields: "sheets(properties(sheetId,title,gridProperties(rowCount)),protectedRanges(protectedRangeId,description),conditionalFormats(ranges(sheetId))),namedRanges(name,namedRangeId)",
   });
   const ada = new Map((meta.data.sheets ?? []).map((s) => [s.properties!.title!, s.properties!.sheetId!] as const));
   const jumlahBaris = new Map(
@@ -65,9 +70,9 @@ export async function setupSheet(
     (s.protectedRanges ?? []).map((p) => ({ protectedRangeId: p.protectedRangeId!, description: p.description })));
   const namedLama = (meta.data.namedRanges ?? []).map((n) => ({ name: n.name!, namedRangeId: n.namedRangeId! }));
 
-  // Rumus berpemisah koma hanya terbaca selagi locale en_US; locale tampilan (in_ID) dipasang di akhir.
+  const cfLama = new Map((meta.data.sheets ?? []).map((s) => [s.properties!.title!, s.conditionalFormats?.length ?? 0] as const));
+
   const requests: sheets_v4.Schema$Request[] = [
-    spreadsheetPropsRequest(LOCALE_RUMUS),
     ...tabRequests(bp, ids, new Set(ada.keys()), jumlahBaris),
     ...namedRangeRequests(ids, namedLama),
     ...validationRequests(bp, ids),
@@ -93,6 +98,8 @@ export async function setupSheet(
   // Header/label statis RAW ("+Omzet" tidak boleh dibaca sebagai rumus); rumus dan nilai bawaan USER_ENTERED.
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "RAW", data: statik } });
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "USER_ENTERED", data } });
+  // Tampilan (warna, lebar, warna bersyarat) masih selagi en_US; locale tampilan (in_ID) dipasang paling akhir.
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: tampilanRequests(bp, ids, cfLama) } });
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: [spreadsheetPropsRequest()] } });
 
   const buktiFolderId = env.buktiFolderId ?? (await pastikanFolder(drive));

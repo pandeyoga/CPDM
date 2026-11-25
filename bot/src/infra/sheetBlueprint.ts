@@ -3,6 +3,7 @@ import { PEMBANDING, PRESETS } from "../domain/period.js";
 import {
   dashboardFormulas, DASHBOARD_HOST_KONDISI, KONTROL_RANGE, KREDIT_COLUMNS, TARGET_HARIAN_COLUMNS, type Layout,
 } from "../domain/sheetFormulas.js";
+import { rumusBarProgres } from "./sheetTampilan.js";
 import {
   BARIS_HOST, GANGGUAN_HEADERS, HEARTBEAT_HEADERS, KALENDER_HEADERS, KEHADIRAN_HEADERS, KOREKSI_HEADERS, LOG_HEADERS,
   PENGATURAN_HOST_HEADERS, PENGATURAN_KEYS, PENGATURAN_KEY_ORDER, PENGATURAN_TARGET_HEADERS, SESI_HEADERS, TAB,
@@ -15,7 +16,8 @@ import {
 
 export type ValidationKind = "list" | "date" | "custom" | "range";
 export interface Validation { range: string; kind: ValidationKind; values?: string[]; formula?: string; pesan?: string }
-export type FormatKind = "rupiah" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "bilangan" | "indeks" | "sembunyi";
+/** ringkas = Rp11,2 jt / Rp137 rb (tab dashboard); selisih = ringkas yang bisa negatif (-Rp2,1 jt / -Rp700 rb). */
+export type FormatKind = "rupiah" | "ringkas" | "selisih" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "bilangan" | "indeks" | "sembunyi";
 export interface TabFormat { range: string; kind: FormatKind }
 export type CellValue = string | number;
 
@@ -85,14 +87,17 @@ function dashboardHost(): TabBlueprint {
   Object.assign(t.values, {
     A4: "Omzet live", B4: "Target bulan (tim)", C4: "Seharusnya (tim)", D4: "% tercapai", E4: "% seharusnya",
     F4: "Selisih jalur", G4: "Pembanding", H4: "vs pembanding", I4: "TikTok", J4: "Shopee", K4: "Belum teratribusi",
+    A6: "Hijau = sesuai/di atas jalur · Kuning = tertinggal ≤10% · Merah = tertinggal >10% · Biru = boleh diisi owner",
+    P7: "Progres",
   });
+  for (let r = r0; r <= r1; r++) t.values[`P${r}`] = rumusBarProgres(r);
   t.formats!.push(
-    { range: "A5:C5", kind: "rupiah" }, { range: "D5:E5", kind: "persen" }, { range: "F5:G5", kind: "rupiah" },
-    { range: "H5", kind: "persen" }, { range: "I5:K5", kind: "rupiah" },
-    { range: `B${r0}:C${r1}`, kind: "rupiah" }, { range: `D${r0}:E${r1}`, kind: "persen" },
-    { range: `F${r0}:G${r1}`, kind: "rupiah" }, { range: `H${r0}:H${r1}`, kind: "persen" },
-    { range: `I${r0}:I${r1}`, kind: "desimal" }, { range: `J${r0}:J${r1}`, kind: "rupiah" },
-    { range: `K${r0}:L${r1}`, kind: "persen" }, { range: `N${r0}:O${r1}`, kind: "rupiah" },
+    { range: "A5:C5", kind: "ringkas" }, { range: "D5:E5", kind: "persen" }, { range: "F5", kind: "selisih" },
+    { range: "G5", kind: "ringkas" }, { range: "H5", kind: "persen" }, { range: "I5:K5", kind: "ringkas" },
+    { range: `B${r0}:C${r1}`, kind: "ringkas" }, { range: `D${r0}:E${r1}`, kind: "persen" },
+    { range: `F${r0}:F${r1}`, kind: "selisih" }, { range: `G${r0}:G${r1}`, kind: "ringkas" }, { range: `H${r0}:H${r1}`, kind: "persen" },
+    { range: `I${r0}:I${r1}`, kind: "desimal" }, { range: `J${r0}:J${r1}`, kind: "ringkas" },
+    { range: `K${r0}:L${r1}`, kind: "persen" }, { range: `N${r0}:O${r1}`, kind: "ringkas" },
   );
   return {
     title: TAB.dashboardHost,
@@ -108,9 +113,20 @@ function dashboardHost(): TabBlueprint {
 
 function harianPerHost(): TabBlueprint {
   const t = filterTab("Harian per Host", "Harian per Host");
-  t.formats!.push({ range: "A5:A96", kind: "tanggal" }, { range: "B5:K96", kind: "rupiah" });
+  t.formats!.push({ range: "A5:A96", kind: "tanggal" }, { range: "B5:K96", kind: "ringkas" });
   return { title: "Harian per Host", headerRow: 4, headers: ["Tanggal"], ...t };
 }
+
+/** Kamus metrik di bawah Analisis Live (format-anlive.png), supaya semua orang memakai definisi yang sama. */
+const KAMUS_LIVE = [
+  "Kamus metrik live",
+  "Konversi = pesanan (Shopee) atau produk terjual (TikTok) ÷ penonton yang masuk (dilihat/tayangan)",
+  "Add-to-cart rate (Shopee) = masuk keranjang ÷ dilihat · Cart-to-order (Shopee) = pesanan ÷ masuk keranjang",
+  "Tap-in rate (TikTok) = tayangan ÷ impresi · AOV = omzet ÷ pesanan · Omzet/jam = omzet ÷ jam on-air",
+  "Indeks slot = omzet/jam host ÷ rata-rata semua host di jam yang sama (adil untuk host yang dapat jam sepi)",
+  "Peta jam: omzet per jam menurut jam dalam sehari; makin biru makin ramai",
+  "Angka TikTok dibulatkan di layar (mis. Rp578rb), jadi omzet TikTok per host adalah perkiraan",
+];
 
 function analisisLive(): TabBlueprint {
   const t = filterTab("Analisis Live", "Analisis Live");
@@ -122,12 +138,13 @@ function analisisLive(): TabBlueprint {
   t.values.A32 = "Peta jam (omzet/jam)";
   t.values.A33 = "Sen–Kam"; t.values.A34 = "Jum–Min";
   for (let j = 0; j < 24; j++) t.values[`${huruf(1 + j)}32`] = j;
+  KAMUS_LIVE.forEach((baris, i) => { t.values[`A${37 + i}`] = baris; });
   t.formats!.push(
-    { range: "B6", kind: "rupiah" }, { range: "B11:B13", kind: "persen" }, { range: "B14:B15", kind: "rupiah" }, { range: "B16", kind: "persen" },
-    { range: "E6", kind: "rupiah" }, { range: "E12:E13", kind: "persen" }, { range: "E14", kind: "rupiah" }, { range: "E15", kind: "persen" },
+    { range: "B6", kind: "ringkas" }, { range: "B11:B13", kind: "persen" }, { range: "B14:B15", kind: "ringkas" }, { range: "B16", kind: "persen" },
+    { range: "E6", kind: "ringkas" }, { range: "E12:E13", kind: "persen" }, { range: "E14", kind: "ringkas" }, { range: "E15", kind: "persen" },
     { range: "B7:B10", kind: "bilangan" }, { range: "E7:E11", kind: "bilangan" },
-    { range: "B20:C29", kind: "rupiah" }, { range: "D20:E29", kind: "persen" }, { range: "F20:F29", kind: "desimal" },
-    { range: "G20:G29", kind: "indeks" }, { range: "B33:Y34", kind: "rupiah" },
+    { range: "B20:C29", kind: "ringkas" }, { range: "D20:E29", kind: "persen" }, { range: "F20:F29", kind: "desimal" },
+    { range: "G20:G29", kind: "indeks" }, { range: "B33:Y34", kind: "ringkas" },
     { range: "AA5:AB96", kind: "sembunyi" },
   );
   return {
@@ -141,15 +158,15 @@ function analisisLive(): TabBlueprint {
 function trenBulanan(): TabBlueprint {
   const values: Record<string, CellValue> = { A1: "Tren Bulanan", B4: "Tim" };
   const formats: TabFormat[] = [
-    { range: "A6:A29", kind: "bulan" }, { range: "B6:C29", kind: "rupiah" }, { range: "D6:D29", kind: "persen" },
-    { range: "E6:E29", kind: "rupiah" }, { range: "F6:F29", kind: "persen" },
+    { range: "A6:A29", kind: "bulan" }, { range: "B6:C29", kind: "ringkas" }, { range: "D6:D29", kind: "persen" },
+    { range: "E6:E29", kind: "ringkas" }, { range: "F6:F29", kind: "persen" },
   ];
   for (let i = 0; i < MAX_HOST; i++) {
     const c = [0, 1, 2, 3, 4].map((j) => huruf(6 + 5 * i + j)) as [string, string, string, string, string];
     ["Realisasi", "Target", "%", "Omzet/jam", "Konversi"].forEach((l, j) => { values[`${c[j]!}5`] = l; });
     formats.push(
-      { range: `${c[0]}6:${c[1]}29`, kind: "rupiah" }, { range: `${c[2]}6:${c[2]}29`, kind: "persen" },
-      { range: `${c[3]}6:${c[3]}29`, kind: "rupiah" }, { range: `${c[4]}6:${c[4]}29`, kind: "persen" },
+      { range: `${c[0]}6:${c[1]}29`, kind: "ringkas" }, { range: `${c[2]}6:${c[2]}29`, kind: "persen" },
+      { range: `${c[3]}6:${c[3]}29`, kind: "ringkas" }, { range: `${c[4]}6:${c[4]}29`, kind: "persen" },
     );
   }
   return {
@@ -368,6 +385,9 @@ export function validationRequests(bp: TabBlueprint[], ids: ReadonlyMap<string, 
 
 const FORMAT: Record<FormatKind, { type: string; pattern: string }> = {
   rupiah: { type: "NUMBER", pattern: '"Rp"#,##0' },
+  // Diuji di Sheets asli (in_ID): 11627070 → "Rp11,6 jt", 137000 → "Rp137 rb", -4257545 → "-Rp4,3 jt".
+  ringkas: { type: "NUMBER", pattern: '[>=1000000]"Rp"0.0,," jt";[>=1000]"Rp"0," rb";"Rp"0' },
+  selisih: { type: "NUMBER", pattern: '[>=1000000]"Rp"0.0,," jt";[<=-1000000]"Rp"0.0,," jt";"Rp"0," rb"' },
   persen: { type: "PERCENT", pattern: "0.0%" },
   tanggal: { type: "DATE", pattern: "dd/mm/yyyy" },
   bulan: { type: "DATE", pattern: "mmm yyyy" },

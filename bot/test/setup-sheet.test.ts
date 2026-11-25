@@ -216,11 +216,12 @@ describe("setupSheet (klien palsu)", () => {
   it("menulis bawaan Pengaturan hanya ke sel kosong dan mengganti proteksi lama", async () => {
     const { hasil, calls } = await jalankan(true, { "'Pengaturan'!B2": "YA", "'Dashboard Host'!B2": "Kemarin" });
     expect(hasil).toEqual({ spreadsheetId: "SID", buktiFolderId: "FID" });
-    const reqs = calls[0]!.requests as Array<Record<string, unknown>>;
+    // Batch utama = yang memuat proteksi (batch pertama kini hanya locale en_US).
+    const reqs = calls.find((c) => (c.requests as Array<Record<string, unknown>> | undefined)?.some((r) => "addProtectedRange" in r))!.requests as Array<Record<string, unknown>>;
     expect(reqs.some((r) => "deleteProtectedRange" in r)).toBe(true);
     expect(reqs.some((r) => "deleteNamedRange" in r)).toBe(true);
     expect(reqs.some((r) => "addSheet" in r)).toBe(false);
-    const ditulis = calls[2]!.data!.map((d) => d.range);
+    const ditulis = calls.filter((c) => c.data)[1]!.data!.map((d) => d.range);
     expect(ditulis).not.toContain("'Pengaturan'!B2");
     expect(ditulis).not.toContain("'Dashboard Host'!B2");
     expect(ditulis).toContain("'Dashboard Host'!H2");
@@ -331,7 +332,8 @@ describe("setupSheet: editor proteksi dan RAW", () => {
       files: { list: async () => ({ data: { files: [{ id: "F" }] } }) } };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await setupSheet(sheets as any, drive as any, { spreadsheetId: "S", ...(ownerEmail ? { ownerEmail } : {}) });
-    const adds = (reqs[0] as Array<{ addProtectedRange?: { protectedRange: { editors: { users: string[] } } } }>).filter((r) => r.addProtectedRange);
+    const utama = reqs.find((b) => (b as Array<Record<string, unknown>>).some((r) => "addProtectedRange" in r))!;
+    const adds = (utama as Array<{ addProtectedRange?: { protectedRange: { editors: { users: string[] } } } }>).filter((r) => r.addProtectedRange);
     return { users: adds.map((r) => r.addProtectedRange!.protectedRange.editors.users), modes };
   }
   it("editor selalu akun OAuth; OWNER_EMAIL berbeda ditambahkan", async () => {
@@ -486,5 +488,57 @@ describe("Analisis Live: semua angka diberi format (diperiksa di Sheets asli: '6
     const pola = formatRequests(sheetBlueprint(), ids).map((r) => r.repeatCell!.cell!.userEnteredFormat!.numberFormat!.pattern);
     expect(pola).toContain("#,##0");
     expect(pola).toContain("0.00");
+  });
+});
+
+describe("setupSheet: lapisan tampilan", () => {
+  async function jalankan(cfAda: Record<string, number>) {
+    const { setupSheet } = await import("../scripts/setup-sheet.js");
+    const titles = sheetBlueprint().map((t) => t.title);
+    const log: Array<{ jenis: string; requests?: Array<Record<string, any>>; fields?: string }> = [];
+    const sheets = {
+      spreadsheets: {
+        create: async () => ({ data: { spreadsheetId: "SID" } }),
+        get: async (a: { fields: string }) => {
+          log.push({ jenis: "get", fields: a.fields });
+          return { data: { sheets: titles.map((title, i) => ({
+            properties: { sheetId: 100 + i, title },
+            conditionalFormats: Array.from({ length: cfAda[title] ?? 0 }, () => ({ ranges: [{ sheetId: 100 + i }] })),
+          })), namedRanges: [] } };
+        },
+        batchUpdate: async (a: { requestBody: { requests: Array<Record<string, any>> } }) => void log.push({ jenis: "batch", requests: a.requestBody.requests }),
+        values: {
+          batchGet: async () => ({ data: { valueRanges: [] } }),
+          batchUpdate: async (a: { requestBody: { valueInputOption: string } }) => void log.push({ jenis: `values:${a.requestBody.valueInputOption}` }),
+        },
+      },
+    };
+    const drive = { about: { get: async () => ({ data: { user: { emailAddress: "o@example.com" } } }) } };
+    await setupSheet(sheets as never, drive as never, { spreadsheetId: "SID", buktiFolderId: "F" });
+    return log;
+  }
+  const isi = (b: { requests?: Array<Record<string, any>> }, k: string) => (b.requests ?? []).some((r) => k in r);
+
+  it("locale en_US dikirim sendiri lebih dulu, supaya rumus validasi & warna bersyarat dibaca dengan koma", async () => {
+    const log = await jalankan({});
+    const batch = log.filter((x) => x.jenis === "batch");
+    expect(batch[0]!.requests).toHaveLength(1);
+    expect(batch[0]!.requests![0]!.updateSpreadsheetProperties.properties.locale).toBe("en_US");
+  });
+
+  it("tampilan dikirim sesudah nilai ditulis dan sebelum locale in_ID", async () => {
+    const log = await jalankan({});
+    const iTampilan = log.findIndex((x) => x.jenis === "batch" && isi(x, "addConditionalFormatRule"));
+    const iNilai = log.findIndex((x) => x.jenis === "values:USER_ENTERED");
+    const iInId = log.findIndex((x) => x.jenis === "batch" && x.requests!.some((r) => r.updateSpreadsheetProperties?.properties?.locale === "in_ID"));
+    expect(iTampilan).toBeGreaterThan(iNilai);
+    expect(iInId).toBeGreaterThan(iTampilan);
+  });
+
+  it("aturan warna bersyarat lama dihitung dari spreadsheets.get dan dihapus", async () => {
+    const log = await jalankan({ "Dashboard Host": 2, "Kehadiran": 1 });
+    expect(log.find((x) => x.jenis === "get")!.fields).toContain("conditionalFormats");
+    const tampilan = log.find((x) => x.jenis === "batch" && isi(x, "addConditionalFormatRule"))!;
+    expect(tampilan.requests!.filter((r) => r.deleteConditionalFormatRule)).toHaveLength(3);
   });
 });
