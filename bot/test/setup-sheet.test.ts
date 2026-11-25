@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { sheets_v4 } from "googleapis";
 import { describe, expect, it, vi } from "vitest";
 import {
-  a1ToGrid, formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint,
+  a1ToGrid, formatRequests, gridKolomRequests, kebutuhanKolom, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint,
   spreadsheetPropsRequest, tabCells, tabCellsTerpisah, tabRequests, validationRequests, valueRanges, NAMED_RANGES, LOCALE_RUMUS,
 } from "../src/infra/sheetBlueprint.js";
 import { dashboardFormulas, type Layout } from "../src/domain/sheetFormulas.js";
@@ -413,7 +413,7 @@ describe("ukuran grid tab fakta", () => {
 
   it("setupSheet (jalan ulang): membaca gridProperties.rowCount dan memperbesar tab fakta yang masih 1.000 baris", async () => {
     const { reqs, fields } = await jalankan(() => 1_000);
-    expect(fields).toContain("gridProperties(rowCount)");
+    expect(fields).toContain("gridProperties(rowCount,columnCount)");
     const u = reqs.filter((r) => r.updateSheetProperties?.fields === "gridProperties.rowCount").map((r) => r.updateSheetProperties.properties.gridProperties.rowCount);
     expect(u.sort((a, b) => a - b)).toEqual([5_000, 5_000, 20_000, 20_000, 50_000]);
   });
@@ -540,5 +540,98 @@ describe("setupSheet: lapisan tampilan", () => {
     expect(log.find((x) => x.jenis === "get")!.fields).toContain("conditionalFormats");
     const tampilan = log.find((x) => x.jenis === "batch" && isi(x, "addConditionalFormatRule"))!;
     expect(tampilan.requests!.filter((r) => r.deleteConditionalFormatRule)).toHaveLength(3);
+  });
+});
+
+describe("ukuran kolom grid (diuji di Sheets asli: spreadsheet baru hanya 26 kolom A–Z)", () => {
+  // Regresi: "Range ('Analisis Live'!AA5:AB96) exceeds grid limits. Max rows: 1000, max columns: 26".
+  // Klien palsu ini meniru Google: setiap rentang di luar grid ditolak, dan ukuran grid ikut berubah sesuai request.
+  async function jalankanSepertiGoogle(opsi: { spreadsheetId?: string; fileLama?: string } = { spreadsheetId: "SID" }) {
+    const { setupSheet } = await import("../scripts/setup-sheet.js");
+    const titles = sheetBlueprint().map((t) => t.title);
+    const idTab = new Map(titles.map((t, i) => [t, 100 + i] as const));
+    const kolom = new Map(titles.map((t) => [idTab.get(t)!, 26] as const));
+    const baris = new Map(titles.map((t) => [idTab.get(t)!, 1000] as const));
+    let dibuat = 0;
+    const cek = (sheetId: number, k?: number, b?: number, asal = "") => {
+      if (k !== undefined && k > kolom.get(sheetId)!) throw new Error(`${asal} melebihi ${kolom.get(sheetId)} kolom (butuh ${k}) di sheet ${sheetId}`);
+      if (b !== undefined && b > baris.get(sheetId)!) throw new Error(`${asal} melebihi ${baris.get(sheetId)} baris (butuh ${b}) di sheet ${sheetId}`);
+    };
+    const jelajah = (o: unknown, asal: string): void => {
+      if (Array.isArray(o)) return o.forEach((x) => jelajah(x, asal));
+      if (!o || typeof o !== "object") return;
+      const g = o as Record<string, any>;
+      if (typeof g.sheetId === "number") {
+        cek(g.sheetId, g.endColumnIndex ?? (g.startColumnIndex !== undefined ? g.startColumnIndex + 1 : undefined),
+          g.endRowIndex ?? (g.startRowIndex !== undefined ? g.startRowIndex + 1 : undefined), asal);
+        if (g.dimension === "COLUMNS") cek(g.sheetId, g.endIndex, undefined, asal);
+        if (g.dimension === "ROWS") cek(g.sheetId, undefined, g.endIndex, asal);
+      }
+      for (const v of Object.values(g)) jelajah(v, asal);
+    };
+    const kolomDari = (h: string) => [...h].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+    const sheets = {
+      spreadsheets: {
+        create: async () => { dibuat++; return { data: { spreadsheetId: "BARU" } }; },
+        get: async () => ({ data: { sheets: titles.map((title) => ({ properties: { sheetId: idTab.get(title)!, title,
+          gridProperties: { rowCount: baris.get(idTab.get(title)!), columnCount: kolom.get(idTab.get(title)!) } } })), namedRanges: [] } }),
+        batchUpdate: async (a: { requestBody: { requests: Array<Record<string, any>> } }) => {
+          for (const r of a.requestBody.requests) {
+            const gp = r.updateSheetProperties?.properties?.gridProperties;
+            if (gp) {
+              const sid = r.updateSheetProperties.properties.sheetId;
+              if (gp.columnCount) kolom.set(sid, gp.columnCount);
+              if (gp.rowCount) baris.set(sid, gp.rowCount);
+              continue;
+            }
+            jelajah(r, Object.keys(r)[0]!);
+          }
+        },
+        values: {
+          batchGet: async () => ({ data: { valueRanges: [] } }),
+          batchUpdate: async (a: { requestBody: { data: Array<{ range: string }> } }) => {
+            for (const d of a.requestBody.data) {
+              const m = /^'(.+)'!([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(d.range)!;
+              cek(idTab.get(m[1]!)!, kolomDari(m[4] ?? m[2]!), Number(m[5] ?? m[3]), `nilai ${d.range}`);
+            }
+          },
+        },
+      },
+    };
+    const drive = {
+      about: { get: async () => ({ data: { user: { emailAddress: "o@example.com" } } }) },
+      files: {
+        list: async (a: { q: string }) => ({ data: { files: a.q.includes("spreadsheet") && opsi.fileLama ? [{ id: opsi.fileLama }] : [] } }),
+        create: async () => ({ data: { id: "FID" } }),
+      },
+    };
+    const hasil = await setupSheet(sheets as never, drive as never, { ...(opsi.spreadsheetId ? { spreadsheetId: opsi.spreadsheetId } : {}), buktiFolderId: "F" });
+    return { hasil, kolom, idTab, dibuat };
+  }
+
+  it("spreadsheet baru (26 kolom) tidak ditolak: grid diperbesar dulu untuk Analisis Live (AB) dan Tren Bulanan (BD)", async () => {
+    const { kolom, idTab } = await jalankanSepertiGoogle();
+    expect(kolom.get(idTab.get("Analisis Live")!)).toBeGreaterThanOrEqual(28);
+    expect(kolom.get(idTab.get("Tren Bulanan")!)).toBeGreaterThanOrEqual(56);
+    // Tab yang cukup dengan 26 kolom tidak diubah.
+    expect(kolom.get(idTab.get("Pengaturan")!)).toBe(26);
+  });
+
+  it("kebutuhanKolom & gridKolomRequests: hanya memperbesar, tidak pernah menyusutkan", () => {
+    const ids = resolveSheetIds(bp, new Map());
+    const butuh = kebutuhanKolom(bp, ids, formatRequests(bp, ids));
+    expect(butuh.get(ids.get("Analisis Live")!)).toBe(28);
+    const r = gridKolomRequests(butuh, new Map([[ids.get("Analisis Live")!, 40]]));
+    expect(r.some((x) => x.updateSheetProperties?.properties?.sheetId === ids.get("Analisis Live"))).toBe(false);
+    expect(r.every((x) => x.updateSheetProperties!.fields === "gridProperties.columnCount")).toBe(true);
+  });
+
+  it("jalan ulang tanpa LIVE_SPREADSHEET_ID memakai spreadsheet buatan bot yang sudah ada (tidak membuat ganda)", async () => {
+    const lama = await jalankanSepertiGoogle({ fileLama: "LAMA" });
+    expect(lama.hasil.spreadsheetId).toBe("LAMA");
+    expect(lama.dibuat).toBe(0);
+    const baru = await jalankanSepertiGoogle({});
+    expect(baru.hasil.spreadsheetId).toBe("BARU");
+    expect(baru.dibuat).toBe(1);
   });
 });

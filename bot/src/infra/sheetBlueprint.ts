@@ -357,6 +357,52 @@ export function tabRequests(
   return out;
 }
 
+/** Spreadsheet/tab baru dari Google hanya punya 26 kolom (A–Z); rentang di luarnya ditolak ("exceeds grid limits"). */
+export const KOLOM_BAWAAN = 26;
+
+/**
+ * Jumlah kolom minimum per sheetId supaya semua rentang di `requests` (GridRange, DimensionRange kolom, koordinat sel)
+ * dan semua sel nilai blueprint (header, label, rumus, bawaan) muat di grid.
+ */
+export function kebutuhanKolom(bp: TabBlueprint[], ids: ReadonlyMap<string, number>, requests: Request[]): Map<number, number> {
+  const butuh = new Map<number, number>();
+  const catat = (sheetId: number, kolom: number): void => {
+    if (kolom > (butuh.get(sheetId) ?? 0)) butuh.set(sheetId, kolom);
+  };
+  const jelajah = (o: unknown): void => {
+    if (Array.isArray(o)) { o.forEach(jelajah); return; }
+    if (!o || typeof o !== "object") return;
+    const g = o as Record<string, unknown>;
+    if (typeof g.sheetId === "number") {
+      if (typeof g.endColumnIndex === "number") catat(g.sheetId, g.endColumnIndex);
+      else if (typeof g.startColumnIndex === "number") catat(g.sheetId, g.startColumnIndex + 1);
+      if (g.dimension === "COLUMNS" && typeof g.endIndex === "number") catat(g.sheetId, g.endIndex);
+      if (typeof g.columnIndex === "number") catat(g.sheetId, g.columnIndex + 1);
+    }
+    Object.values(g).forEach(jelajah);
+  };
+  jelajah(requests);
+  for (const t of bp) {
+    const id = ids.get(t.title)!;
+    const sel = tabCellsTerpisah(t);
+    for (const a1 of [...sel.statik.keys(), ...sel.rumus.keys(), ...Object.keys(t.defaults ?? {})]) {
+      catat(id, a1ToGrid(a1, id).endColumnIndex!);
+    }
+  }
+  return butuh;
+}
+
+/** Perbesar jumlah kolom tab yang kurang (tidak pernah menyusutkan). `sekarang` kosong = ukuran bawaan 26. */
+export function gridKolomRequests(butuh: ReadonlyMap<number, number>, sekarang: ReadonlyMap<number, number>): Request[] {
+  const out: Request[] = [];
+  for (const [sheetId, kolom] of butuh) {
+    if (kolom > (sekarang.get(sheetId) ?? KOLOM_BAWAAN)) {
+      out.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { columnCount: kolom } }, fields: "gridProperties.columnCount" } });
+    }
+  }
+  return out;
+}
+
 export function namedRangeRequests(ids: ReadonlyMap<string, number>, existing: Array<{ name: string; namedRangeId: string }>): Request[] {
   const out: Request[] = [];
   for (const n of NAMED_RANGES) {

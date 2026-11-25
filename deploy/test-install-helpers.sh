@@ -149,6 +149,17 @@ waha_post() { echo "$1" >> "$PANGGIL"; [[ "$1" != */logout ]]; }
 : > "$PANGGIL"; reset_sesi_waha >/dev/null 2>&1; r=$?
 cek "reset: logout selalu ditolak -> gagal (1), tidak start" "1" "$r"
 
+# --- langkah_sheet: image bot dibangun ulang dulu (jalan ulang melewati langkah 8, jadi kode baru harus ikut) ---
+hasil=$(
+  STATE_DIR="$T/state"; ENV_FILE="$T/sheet.env"; : > "$ENV_FILE"; DARI_AWAL=1
+  PANGGIL_DC="$T/dc"; : > "$PANGGIL_DC"
+  dc() { echo "$1" >> "$PANGGIL_DC"; [[ "$1" != run ]] || printf 'LIVE_SPREADSHEET_ID=S1\nBUKTI_FOLDER_ID=F1\n'; }
+  ask() { ASK_ANSWER=""; }
+  langkah_sheet >/dev/null 2>&1
+  printf '%s|%s' "$(paste -sd' ' "$PANGGIL_DC")" "$(get_env LIVE_SPREADSHEET_ID "$ENV_FILE")"
+)
+cek "langkah_sheet: build sebelum run, ID tersimpan" "build run|S1" "$hasil"
+
 # --- on_error: satu laporan saja walau galat terjadi di dalam $(...) bertingkat ---
 # shellcheck disable=SC2016
 hasil=$(bash -c 'source ./install.sh; set -Eeuo pipefail; trap "on_error \$LINENO" ERR; f() { local x; x="$(false | grep a)"; echo "$x"; }; g() { f; }; g' 2>&1 | grep -c "Pemasangan berhenti")

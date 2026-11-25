@@ -3,7 +3,7 @@ import type { drive_v3, sheets_v4 } from "googleapis";
 import { klienGoogle, PENGATURAN_KEYS, PENGATURAN_KEY_ORDER, TAB } from "../src/infra/sheets.js";
 import { tampilanRequests } from "../src/infra/sheetTampilan.js";
 import {
-  formatRequests, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint, spreadsheetPropsRequest,
+  formatRequests, gridKolomRequests, kebutuhanKolom, namedRangeRequests, protectionRequests, resolveSheetIds, sheetBlueprint, spreadsheetPropsRequest,
   tabCellsTerpisah, tabRequests, validationRequests, valueRanges, LOCALE_RUMUS, ZONA_WAKTU, type CellValue, type TabBlueprint,
 } from "../src/infra/sheetBlueprint.js";
 
@@ -45,7 +45,9 @@ export async function setupSheet(
   const editors = [akun, ...(env.ownerEmail && env.ownerEmail !== akun ? [env.ownerEmail] : [])];
   const email = env.ownerEmail ?? akun;
 
-  let id = env.spreadsheetId;
+  // Jalan ulang tanpa LIVE_SPREADSHEET_ID (mis. percobaan sebelumnya gagal sebelum ID tersimpan): pakai spreadsheet
+  // buatan bot yang sudah ada, supaya tidak ada dua "CP – Live Tracker". Scope drive.file hanya melihat file buatan bot.
+  let id = env.spreadsheetId ?? (await cariSpreadsheetLama(drive));
   if (!id) {
     const baru = await sheets.spreadsheets.create({
       requestBody: { properties: { title: JUDUL, timeZone: ZONA_WAKTU, locale: LOCALE_RUMUS }, sheets: bp.map((t) => ({ properties: { title: t.title } })) },
@@ -60,7 +62,7 @@ export async function setupSheet(
 
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: id,
-    fields: "sheets(properties(sheetId,title,gridProperties(rowCount)),protectedRanges(protectedRangeId,description),conditionalFormats(ranges(sheetId))),namedRanges(name,namedRangeId)",
+    fields: "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),protectedRanges(protectedRangeId,description),conditionalFormats(ranges(sheetId))),namedRanges(name,namedRangeId)",
   });
   const ada = new Map((meta.data.sheets ?? []).map((s) => [s.properties!.title!, s.properties!.sheetId!] as const));
   const jumlahBaris = new Map(
@@ -71,13 +73,21 @@ export async function setupSheet(
   const namedLama = (meta.data.namedRanges ?? []).map((n) => ({ name: n.name!, namedRangeId: n.namedRangeId! }));
 
   const cfLama = new Map((meta.data.sheets ?? []).map((s) => [s.properties!.title!, s.conditionalFormats?.length ?? 0] as const));
+  const jumlahKolom = new Map((meta.data.sheets ?? []).flatMap((s) =>
+    (s.properties?.gridProperties?.columnCount != null ? [[s.properties.sheetId!, s.properties.gridProperties.columnCount] as const] : [])));
 
-  const requests: sheets_v4.Schema$Request[] = [
-    ...tabRequests(bp, ids, new Set(ada.keys()), jumlahBaris),
+  const isi: sheets_v4.Schema$Request[] = [
     ...namedRangeRequests(ids, namedLama),
     ...validationRequests(bp, ids),
     ...formatRequests(bp, ids),
     ...protectionRequests(bp, ids, editors, protectedLama),
+  ];
+  const tampilan = tampilanRequests(bp, ids, cfLama);
+  // Kolom diperbesar sesudah tab dibuat dan sebelum rentang apa pun dipakai (Analisis Live sampai AB, Tren Bulanan sampai BD).
+  const requests: sheets_v4.Schema$Request[] = [
+    ...tabRequests(bp, ids, new Set(ada.keys()), jumlahBaris),
+    ...gridKolomRequests(kebutuhanKolom(bp, ids, [...isi, ...tampilan]), jumlahKolom),
+    ...isi,
   ];
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests } });
 
@@ -99,11 +109,18 @@ export async function setupSheet(
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "RAW", data: statik } });
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: id, requestBody: { valueInputOption: "USER_ENTERED", data } });
   // Tampilan (warna, lebar, warna bersyarat) masih selagi en_US; locale tampilan (in_ID) dipasang paling akhir.
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: tampilanRequests(bp, ids, cfLama) } });
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: tampilan } });
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests: [spreadsheetPropsRequest()] } });
 
   const buktiFolderId = env.buktiFolderId ?? (await pastikanFolder(drive));
   return { spreadsheetId: id, buktiFolderId };
+}
+
+/** Spreadsheet "CP – Live Tracker" terbaru yang dibuat bot ini (scope drive.file), atau undefined. */
+async function cariSpreadsheetLama(drive: drive_v3.Drive): Promise<string | undefined> {
+  const q = `name='${JUDUL}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+  const res = await drive.files.list({ q, fields: "files(id)", orderBy: "createdTime desc", pageSize: 1 });
+  return res.data.files?.[0]?.id ?? undefined;
 }
 
 /** Folder dibuat oleh OAuth client yang sama (scope drive.file), supaya bot bisa menulis ke dalamnya. */

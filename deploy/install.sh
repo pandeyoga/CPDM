@@ -760,6 +760,9 @@ langkah_sheet() {
   owner="$ASK_ANSWER"
   if [[ -n "$owner" && "$owner" != *@*.* ]]; then die "Email tidak valid: $owner"; fi
   [[ -n "$owner" ]] && set_env OWNER_EMAIL "$owner"
+  # Jalan ulang melewati langkah 8 (yang membangun image), jadi bangun di sini agar kode terbaru yang dipakai.
+  info "Menyiapkan image bot (cepat bila tidak ada perubahan)..."
+  dc build --quiet bot >/dev/null || { err "Build bot gagal. Lihat pesan di atas."; return 1; }
   out=$(mktemp)
   chmod 600 "$out"
   info "Membuat spreadsheet 'CP – Live Tracker' dan folder 'Bukti Live' (sekitar 1 menit)..."
