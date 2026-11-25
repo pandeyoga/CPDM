@@ -92,6 +92,26 @@ describe("tampilanRequests", () => {
     expect(lebarH.updateDimensionProperties!.properties!.pixelSize).toBeGreaterThanOrEqual(130);
   });
 
+  it("Analisis Live: corong tampil sebagai kartu (judul gelap, omzet besar, rasio corong disorot)", () => {
+    const sel = (a1Baris: number, kolom: number) => r.filter((x) => x.repeatCell?.range?.sheetId === id("Analisis Live") &&
+      x.repeatCell.range.startRowIndex! <= a1Baris - 1 && x.repeatCell.range.endRowIndex! >= a1Baris &&
+      x.repeatCell.range.startColumnIndex! <= kolom && x.repeatCell.range.endColumnIndex! > kolom).map((x) => x.repeatCell!.cell!.userEnteredFormat!);
+    // Judul kartu A5 (Shopee) dan D5 (TikTok): latar biru tua, teks putih.
+    for (const k of [0, 3]) {
+      expect(sel(5, k).some((f) => JSON.stringify(f.backgroundColorStyle?.rgbColor) === JSON.stringify(hex(WARNA.judul))), `kolom ${k}`).toBe(true);
+      expect(sel(5, k).some((f) => JSON.stringify(f.textFormat?.foregroundColorStyle?.rgbColor) === JSON.stringify(hex("#FFFFFF")))).toBe(true);
+    }
+    // Omzet (B6, E6) besar.
+    for (const k of [1, 4]) expect(sel(6, k).some((f) => (f.textFormat?.fontSize ?? 0) >= 13), `kolom ${k}`).toBe(true);
+    // Rasio corong disorot (latar abu muda, teks biru tua; bukan biru muda karena biru = boleh diisi owner):
+    // Shopee ATC/cart-to-order/konversi (baris 11–13), TikTok tap-in/konversi (baris 12–13).
+    for (const [b, k] of [[11, 1], [12, 1], [13, 1], [12, 4], [13, 4]] as const) {
+      expect(sel(b, k).some((f) => JSON.stringify(f.backgroundColorStyle?.rgbColor) === JSON.stringify(hex(WARNA.kpi))), `${b},${k}`).toBe(true);
+      expect(sel(b, k).some((f) => JSON.stringify(f.textFormat?.foregroundColorStyle?.rgbColor) === JSON.stringify(hex(WARNA.judul)))).toBe(true);
+      expect(sel(b, k).some((f) => JSON.stringify(f.backgroundColorStyle?.rgbColor) === JSON.stringify(hex(WARNA.isian)))).toBe(false);
+    }
+  });
+
   it("Analisis Live: peta jam bergradasi putih → biru", () => {
     const g = cf(r, id("Analisis Live")).find((x) => x.gradientRule)!;
     expect(g.ranges![0]).toMatchObject({ startRowIndex: 32, endRowIndex: 34, startColumnIndex: 1, endColumnIndex: 25 });

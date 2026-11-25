@@ -195,9 +195,14 @@ function harianPerHost(id: number): Request[] {
 function analisisLive(id: number): Request[] {
   return [
     ...gayaFilter(id),
-    gaya(id, "A5:B5", { bg: WARNA.header, tebal: true, ukuran: 11 }), gaya(id, "D5:E5", { bg: WARNA.header, tebal: true, ukuran: 11 }),
+    // Corong sebagai dua kartu (format-anlive.png): judul gelap, omzet besar, rasio corong disorot.
+    gaya(id, "A5:B5", { bg: WARNA.judul, teks: "#FFFFFF", tebal: true, ukuran: 11 }),
+    gaya(id, "D5:E5", { bg: WARNA.judul, teks: "#FFFFFF", tebal: true, ukuran: 11 }),
     gaya(id, "A6:A16", { teks: WARNA.abu }), gaya(id, "D6:D15", { teks: WARNA.abu }),
     gaya(id, "B6:B16", { tebal: true }), gaya(id, "E6:E15", { tebal: true }),
+    gaya(id, "B6", { ukuran: 13 }), gaya(id, "E6", { ukuran: 13 }), tinggi(id, 6, 28),
+    gaya(id, "A11:B13", { bg: WARNA.kpi }), gaya(id, "B11:B13", { teks: WARNA.judul }),
+    gaya(id, "D12:E13", { bg: WARNA.kpi }), gaya(id, "E12:E13", { teks: WARNA.judul }),
     garis(id, "A5:B16"), garis(id, "D5:E15"),
     gaya(id, "A20:A29", { tebal: true }), garis(id, "A19:G29"),
     cfRumus(id, "G20:G29", "=AND(ISNUMBER($G20),$G20>=1.05)", "ok"),
