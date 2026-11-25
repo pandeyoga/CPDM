@@ -473,11 +473,13 @@ Buka tab **Pengaturan** di spreadsheet. Hanya sel berwarna yang boleh diisi.
 
 **Kolom G–J (host, maksimal 10 baris, G2:G11):**
 
-| G: Nama | H: No WA | I: Aktif mulai | J: Aktif selesai |
+| G: Nama | H: No WA | I: Mulai kerja (opsional) | J: Berhenti (opsional) |
 |---|---|---|---|
-| Brando | 0812xxxxxxxx | (opsional) | (opsional) |
+| Brando | 0812xxxxxxxx | (kosongkan) | (kosongkan) |
 
-Nama host = nama yang akan ditulis di caption foto. Tulis tanpa spasi di awal/akhir. **No WA** diisi supaya bot bisa menandai (@) host.
+Nama host = nama yang akan ditulis di caption foto. Tulis tanpa spasi di awal/akhir. **No WA** diisi supaya bot bisa menandai (@) host; boleh `0812…` atau `62812…`.
+
+**Kolom I–J diisi sekali saja, bukan setiap hari.** Kosongkan untuk host yang sudah bekerja sejak awal bulan. Isi **Mulai kerja** hanya untuk host baru yang masuk di tengah bulan (agar target bulannya dihitung dari hari pertama ia bekerja), dan **Berhenti** saat host keluar. Libur dan izin harian tidak diisi di sini: host cukup menulis `#izin …` di grup, dan bot mencatatnya otomatis.
 
 **Jadwal aktif tetap TIDAK** selama masa uji.
 
