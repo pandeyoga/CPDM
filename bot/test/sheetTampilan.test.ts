@@ -70,6 +70,23 @@ describe("tampilanRequests", () => {
     expect(harian[0]).toContain("INDIRECT(\"'Target Harian'!D2:D\")");
   });
 
+  it("judul tab dan pilihan Bandingkan tidak terpotong", () => {
+    const lebarA = (t: string) => r.find((x) => x.updateDimensionProperties?.range?.sheetId === id(t) &&
+      x.updateDimensionProperties.range.dimension === "COLUMNS" && x.updateDimensionProperties.range.startIndex === 0)!
+      .updateDimensionProperties!.properties!.pixelSize!;
+    // Judul 14pt tebal ("Harian per Host") butuh ±145 px; sel B1 berisi label sehingga judul tidak bisa meluber.
+    for (const t of ["Dashboard Host", "Harian per Host", "Analisis Live"]) expect(lebarA(t), t).toBeGreaterThanOrEqual(150);
+    // H2 berisi dropdown; teks dropdown tidak meluber ke sel sebelah, jadi dibungkus dan baris 2 dibuat cukup tinggi.
+    for (const t of ["Dashboard Host", "Harian per Host", "Analisis Live"]) {
+      const h2 = r.find((x) => x.repeatCell?.range?.sheetId === id(t) && x.repeatCell.range.startRowIndex === 1 &&
+        x.repeatCell.range.startColumnIndex === 7 && x.repeatCell.range.endColumnIndex === 8)!;
+      expect(h2?.repeatCell?.cell?.userEnteredFormat?.wrapStrategy, t).toBe("WRAP");
+      const baris2 = r.find((x) => x.updateDimensionProperties?.range?.sheetId === id(t) &&
+        x.updateDimensionProperties.range.dimension === "ROWS" && x.updateDimensionProperties.range.startIndex === 1)!;
+      expect(baris2.updateDimensionProperties!.properties!.pixelSize, t).toBeGreaterThanOrEqual(40);
+    }
+  });
+
   it("Analisis Live: peta jam bergradasi putih → biru", () => {
     const g = cf(r, id("Analisis Live")).find((x) => x.gradientRule)!;
     expect(g.ranges![0]).toMatchObject({ startRowIndex: 32, endRowIndex: 34, startColumnIndex: 1, endColumnIndex: 25 });

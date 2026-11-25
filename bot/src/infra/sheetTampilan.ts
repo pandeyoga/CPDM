@@ -117,8 +117,10 @@ function gayaFilter(id: number): Request[] {
     gaya(id, "A1", { teks: WARNA.judul, tebal: true, ukuran: 14 }),
     gaya(id, "B1:H1", { teks: WARNA.abu, tebal: true, ukuran: 9 }),
     gaya(id, "B2:H2", { bg: WARNA.isian, tebal: true }),
+    // H2 = dropdown Bandingkan; teks dropdown tidak meluber ke sel sebelah, jadi dibungkus (baris 2 cukup untuk 2 baris).
+    gaya(id, "H2", { bungkus: true }),
     gaya(id, "A3:I3", { teks: WARNA.abu, miring: true, ukuran: 9 }),
-    tinggi(id, 2, 28),
+    tinggi(id, 2, 40),
   ];
 }
 
@@ -162,7 +164,7 @@ function dashboardHost(id: number): Request[] {
     cfRumus(id, "L8:L17", "=AND(ISNUMBER($L8),$L8<0.98,$L8>=0.85)", "warn"),
     cfRumus(id, "L8:L17", "=AND(ISNUMBER($L8),$L8<0.85)", "bad"),
     cfAwalan(id, "M8:M17", "✅", "ok"), cfAwalan(id, "M8:M17", "⚠", "warn"), cfAwalan(id, "M8:M17", "🔴", "bad"),
-    lebar(id, "A", "A", 120), lebar(id, "B", "C", 110), lebar(id, "D", "E", 100), lebar(id, "F", "H", 105),
+    lebar(id, "A", "A", 150), lebar(id, "B", "C", 110), lebar(id, "D", "E", 100), lebar(id, "F", "H", 105),
     lebar(id, "I", "I", 85), lebar(id, "J", "J", 100), lebar(id, "K", "L", 90), lebar(id, "M", "M", 250),
     lebar(id, "N", "O", 120), lebar(id, "P", "P", 150),
   ];
@@ -185,7 +187,7 @@ function harianPerHost(id: number): Request[] {
     cfRumus(id, "B5:K96", `=AND(${isi},${t}>0,B5>=${t})`, "ok"),
     cfRumus(id, "B5:K96", `=AND(${isi},${t}>0,B5<${t},B5>=0.9*${t})`, "warn"),
     cfRumus(id, "B5:K96", `=AND(${isi},${t}>0,B5<0.9*${t})`, "bad"),
-    lebar(id, "A", "A", 110), lebar(id, "B", "K", 105),
+    lebar(id, "A", "A", 150), lebar(id, "B", "K", 105),
     beku(id, 4, 1),
   ];
 }
