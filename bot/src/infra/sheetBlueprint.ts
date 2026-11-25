@@ -17,7 +17,7 @@ import {
 export type ValidationKind = "list" | "date" | "custom" | "range";
 export interface Validation { range: string; kind: ValidationKind; values?: string[]; formula?: string; pesan?: string }
 /** ringkas = Rp11,2 jt / Rp137 rb (tab dashboard); selisih = ringkas yang bisa negatif (-Rp2,1 jt / -Rp700 rb). */
-export type FormatKind = "rupiah" | "ringkas" | "selisih" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "bilangan" | "indeks" | "sembunyi";
+export type FormatKind = "rupiah" | "ringkas" | "selisih" | "persen" | "tanggal" | "bulan" | "jam" | "desimal" | "bilangan" | "indeks" | "sembunyi" | "teks";
 export interface TabFormat { range: string; kind: FormatKind }
 export type CellValue = string | number;
 
@@ -219,6 +219,9 @@ function pengaturan(): TabBlueprint {
       { range: `B${baris(K.liveMulai)}:B${baris(K.jamRekap)}`, kind: "jam" },
       { range: `E2:E${MAX_BARIS_OWNER}`, kind: "rupiah" },
       { range: `I${BARIS_HOST.pertama}:J${BARIS_HOST.terakhir}`, kind: "tanggal" },
+      // Nomor WA sebagai teks: kalau angka, Sheets membuang 0 di depan (0812… → 812…) dan nomornya jadi salah.
+      { range: `H${BARIS_HOST.pertama}:H${BARIS_HOST.terakhir}`, kind: "teks" },
+      { range: `B${baris(K.ownerWaId)}`, kind: "teks" },
     ],
   };
 }
@@ -443,6 +446,7 @@ const FORMAT: Record<FormatKind, { type: string; pattern: string }> = {
   bilangan: { type: "NUMBER", pattern: "#,##0" },
   indeks: { type: "NUMBER", pattern: "0.00" },
   sembunyi: { type: "NUMBER", pattern: ";;;" },
+  teks: { type: "TEXT", pattern: "@" },
 };
 
 export function formatRequests(bp: TabBlueprint[], ids: ReadonlyMap<string, number>): Request[] {

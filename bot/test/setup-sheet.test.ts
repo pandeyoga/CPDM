@@ -635,3 +635,17 @@ describe("ukuran kolom grid (diuji di Sheets asli: spreadsheet baru hanya 26 kol
     expect(baru.dibuat).toBe(1);
   });
 });
+
+describe("Pengaturan: nomor WA berformat teks (Sheets membuang 0 di depan angka: 0812… → 812…)", () => {
+  it("kolom No WA host dan sel No WA owner diformat teks (@)", () => {
+    const p = tab("Pengaturan");
+    const barisOwner = PENGATURAN_KEY_ORDER.indexOf(PENGATURAN_KEYS.ownerWaId) + 2;
+    expect(p.formats).toContainEqual({ range: "H2:H11", kind: "teks" });
+    expect(p.formats).toContainEqual({ range: `B${barisOwner}`, kind: "teks" });
+    const ids = resolveSheetIds(bp, new Map());
+    const teks = formatRequests(bp, ids).filter((r) => r.repeatCell!.range!.sheetId === ids.get("Pengaturan"))
+      .map((r) => r.repeatCell!.cell!.userEnteredFormat!.numberFormat!).filter((f) => f.pattern === "@");
+    expect(teks).toHaveLength(2);
+    expect(teks.every((f) => f.type === "TEXT")).toBe(true);
+  });
+});
