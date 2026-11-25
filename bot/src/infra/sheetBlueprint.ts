@@ -87,7 +87,8 @@ function dashboardHost(): TabBlueprint {
   Object.assign(t.values, {
     A4: "Omzet live", B4: "Target bulan (tim)", C4: "Seharusnya (tim)", D4: "% tercapai", E4: "% seharusnya",
     F4: "Selisih jalur", G4: "Pembanding", H4: "vs pembanding", I4: "TikTok", J4: "Shopee", K4: "Belum teratribusi",
-    A6: "Hijau = sesuai/di atas jalur · Kuning = tertinggal ≤10% · Merah = tertinggal >10% · Biru = boleh diisi owner",
+    A6: "Hijau = sesuai/di atas jalur · Kuning = tertinggal ≤10% · Merah = tertinggal >10% · Biru = boleh diisi owner · " +
+      "Bar = % target bulan · Status = hari berturut-turut di bawah target harian (bisa merah walau jalur bulan hijau)",
     P7: "Progres",
   });
   for (let r = r0; r <= r1; r++) t.values[`P${r}`] = rumusBarProgres(r);

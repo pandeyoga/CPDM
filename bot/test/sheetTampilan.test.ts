@@ -117,6 +117,12 @@ describe("tampilanRequests", () => {
 });
 
 describe("bar progres dan format ringkas", () => {
+  it("legenda Dashboard Host menjelaskan beda bar (jalur bulan) dan status (target harian)", () => {
+    const a6 = String(bp.find((t) => t.title === "Dashboard Host")!.values!.A6);
+    expect(a6).toMatch(/bar = % target bulan/i);
+    expect(a6).toMatch(/status = hari berturut-turut di bawah target harian/i);
+  });
+
   it("kolom P Dashboard Host berisi SPARKLINE per baris host, warna menurut posisi jalur", () => {
     const dh = bp.find((t) => t.title === "Dashboard Host")!;
     expect(dh.values!.P7).toBe("Progres");
