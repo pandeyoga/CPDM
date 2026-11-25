@@ -130,6 +130,25 @@ waha_get() { return 22; }
 hasil=$( (set -Eeuo pipefail; trap 'echo TERHENTI' ERR; d="$(daftar_grup)"; echo "lanjut:[$d]") 2>&1 )
 cek "daftar_grup: WAHA galat -> kosong, skrip lanjut" "lanjut:[]" "$hasil"
 
+# --- sesi lama rusak: FAILED terus tanpa QR -> tawarkan hapus sesi lama ---
+perlu_reset_sesi FAILED 0 31 0; cek "reset: FAILED >30 dtk tanpa QR -> tawarkan" 0 $?
+perlu_reset_sesi FAILED 0 20 0; cek "reset: baru 20 dtk -> belum" 1 $?
+perlu_reset_sesi FAILED 1 60 0; cek "reset: QR pernah muncul (QR kedaluwarsa biasa) -> tidak" 1 $?
+perlu_reset_sesi FAILED 0 60 1; cek "reset: sudah pernah di-reset -> tidak lagi" 1 $?
+perlu_reset_sesi STARTING 0 60 0; cek "reset: STARTING -> tidak" 1 $?
+
+PANGGIL="$T/panggilan"
+waha_post() { echo "$1" >> "$PANGGIL"; }
+: > "$PANGGIL"; reset_sesi_waha >/dev/null 2>&1; r=$?
+cek "reset: logout lalu start" "0|/api/sessions/default/logout /api/sessions/default/start" "$r|$(paste -sd' ' "$PANGGIL")"
+waha_post() { echo "$1" >> "$PANGGIL"; [[ "$1" != */logout || -f "$T/sudah_stop" ]] || return 22; [[ "$1" != */stop ]] || touch "$T/sudah_stop"; }
+: > "$PANGGIL"; rm -f "$T/sudah_stop"; reset_sesi_waha >/dev/null 2>&1; r=$?
+cek "reset: logout ditolak -> stop, logout lagi, start" \
+  "0|/api/sessions/default/logout /api/sessions/default/stop /api/sessions/default/logout /api/sessions/default/start" "$r|$(paste -sd' ' "$PANGGIL")"
+waha_post() { echo "$1" >> "$PANGGIL"; [[ "$1" != */logout ]]; }
+: > "$PANGGIL"; reset_sesi_waha >/dev/null 2>&1; r=$?
+cek "reset: logout selalu ditolak -> gagal (1), tidak start" "1" "$r"
+
 # --- on_error: satu laporan saja walau galat terjadi di dalam $(...) bertingkat ---
 # shellcheck disable=SC2016
 hasil=$(bash -c 'source ./install.sh; set -Eeuo pipefail; trap "on_error \$LINENO" ERR; f() { local x; x="$(false | grep a)"; echo "$x"; }; g() { f; }; g' 2>&1 | grep -c "Pemasangan berhenti")

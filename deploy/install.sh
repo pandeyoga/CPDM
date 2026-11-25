@@ -426,8 +426,27 @@ galat_waha_terakhir() {
 
 DIAGNOSA_CMD="curl -fsSL https://raw.githubusercontent.com/pandeyoga/cpdm/main/deploy/diagnosa-waha.sh | sudo bash"
 
+# Sesi lama rusak: WAHA menyimpan data tautan lama (mis. dari percobaan sebelumnya) yang ditolak WhatsApp,
+# sehingga sesi FAILED terus ("websocket not connected") dan QR baru tidak pernah dibuat.
+# perlu_reset_sesi STATUS PERNAH_QR DETIK SUDAH_RESET -> 0 bila perlu ditawarkan hapus sesi lama.
+perlu_reset_sesi() {
+  [[ "$1" == "FAILED" ]] && (( $2 == 0 && $3 > 30 && $4 == 0 ))
+}
+
+# Hapus data tautan sesi (logout) lalu mulai lagi agar WAHA membuat QR baru. Konfigurasi sesi (webhook dll.)
+# berasal dari docker-compose, jadi tidak ikut hilang. Bila logout ditolak saat sesi FAILED, hentikan dulu.
+reset_sesi_waha() {
+  if ! waha_post "/api/sessions/$SESI/logout" 2>/dev/null; then
+    waha_post "/api/sessions/$SESI/stop" 2>/dev/null || true
+    sleep 2
+    waha_post "/api/sessions/$SESI/logout" 2>/dev/null || return 1
+  fi
+  sleep 3
+  waha_post "/api/sessions/$SESI/start" 2>/dev/null || true
+}
+
 sambungkan_whatsapp() {
-  local paksa="${1:-0}" status="" i t0 detik pernah_qr=0 gagal_terlapor=0 kedaluwarsa_terlapor=0 galat
+  local paksa="${1:-0}" status="" i t0 detik pernah_qr=0 gagal_terlapor=0 kedaluwarsa_terlapor=0 galat sudah_reset=0
   info "Menjalankan WAHA (pertama kali mengunduh image sekitar 1 GB, bisa beberapa menit)..."
   if ! dc up -d waha >/dev/null; then
     err "Gagal menjalankan WAHA. Penyebabnya tertulis di atas."
@@ -478,6 +497,18 @@ sambungkan_whatsapp() {
       *) sleep 3 ;;
     esac
     detik=$(( $(date +%s) - t0 ))
+    if perlu_reset_sesi "$status" "$pernah_qr" "$detik" "$sudah_reset"; then
+      sudah_reset=1
+      warn "Sesi WhatsApp lama di WAHA tampaknya sudah tidak berlaku (pernah tertaut lalu diputus WhatsApp), jadi QR baru tidak muncul."
+      if confirm "Hapus sesi lama dan buat QR baru? (nomor bot belum tersambung, tidak ada data yang hilang)"; then
+        if reset_sesi_waha; then
+          ok "Sesi lama dihapus. Menunggu QR baru..."
+          t0=$(date +%s); gagal_terlapor=0
+          continue
+        fi
+        warn "WAHA menolak menghapus sesi lama."
+      fi
+    fi
     if (( pernah_qr == 0 && detik > 120 )) && [[ "$status" == "FAILED" || "$status" == "STARTING" ]]; then
       err "Sesi WhatsApp terus gagal dimulai selama 2 menit (QR belum pernah muncul)."
       galat="$(galat_waha_terakhir)"
